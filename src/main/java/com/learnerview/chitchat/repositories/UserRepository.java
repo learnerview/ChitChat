@@ -9,12 +9,15 @@ import java.util.Optional;
 
 @Repository
 public interface UserRepository extends MongoRepository<User, String> {
-    
-    Optional<User> findByUsername(String username);
-    
-    List<User> findByUsernameContainingIgnoreCaseOrDisplayNameContainingIgnoreCase(String username, String displayName);
-    
-    boolean existsByUsername(String username);
-    
-    List<User> findByBlockedUserIdsContaining(String userId);
+
+    Optional<User> findByTenantIdAndUsername(String tenantId, String username);
+
+    List<User> findByTenantIdAndUsernameContainingIgnoreCaseOrTenantIdAndDisplayNameContainingIgnoreCase(
+            String tenantIdForUsername,
+            String username,
+            String tenantIdForDisplayName,
+            String displayName
+    );
+
+    boolean existsByTenantIdAndUsername(String tenantId, String username);
 }

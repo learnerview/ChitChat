@@ -1,11 +1,9 @@
 package com.learnerview.chitchat.controllers;
 
-import com.learnerview.chitchat.entities.User;
-import com.learnerview.chitchat.dto.ProfileUpdateRequest;
+import com.learnerview.chitchat.dto.UserProfileResponse;
 import com.learnerview.chitchat.service.UserService;
-import com.learnerview.chitchat.exception.ResourceNotFoundException;
-import jakarta.validation.Valid;
-import org.springframework.beans.factory.annotation.Autowired;
+import jakarta.validation.constraints.NotBlank;
+import lombok.Data;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -14,39 +12,35 @@ import java.util.List;
 @RequestMapping("/api/users")
 public class UserController {
 
-    @Autowired
-    private UserService userService;
+    private final UserService userService;
+
+    public UserController(UserService userService) {
+        this.userService = userService;
+    }
 
     @GetMapping("/search")
-    public List<User> searchUsers(@RequestParam String query) {
-        return userService.searchUsers(query);
+    public List<UserProfileResponse> searchUsers(@RequestParam String query) {
+        return userService.searchUsers(query).stream().map(this::toResponse).toList();
     }
 
     @GetMapping("/profile")
-    public User getProfile(org.springframework.security.core.Authentication auth) {
+    public UserProfileResponse getProfile(org.springframework.security.core.Authentication auth) {
         return userService.findByUsername(auth.getName())
-                .orElseThrow(() -> new ResourceNotFoundException("USER_NOT_FOUND", "User not found: " + auth.getName()));
+                .map(this::toResponse)
+                .orElseThrow(() -> new RuntimeException("User not found: " + auth.getName()));
     }
 
     @GetMapping("/{username}")
-    public User getUser(@PathVariable String username) {
+    public UserProfileResponse getUser(@PathVariable String username) {
         return userService.findByUsername(username)
-                .orElseThrow(() -> new ResourceNotFoundException("USER_NOT_FOUND", "User not found: " + username));
+                .map(this::toResponse)
+                .orElseThrow(() -> new RuntimeException("User not found: " + username));
     }
 
-    @PostMapping("/profile")
-    public User updateProfile(@Valid @RequestBody ProfileUpdateRequest profile, org.springframework.security.core.Authentication auth) {
-        return userService.updateProfile(auth.getName(), profile.getDisplayName(), profile.getBio(), profile.getAvatarUrl());
-    }
-
-    @PostMapping("/{targetUsername}/block")
-    public User block(@PathVariable String targetUsername, org.springframework.security.core.Authentication auth) {
-        return userService.blockUser(auth.getName(), targetUsername);
-    }
-
-    @PostMapping("/{targetUsername}/unblock")
-    public User unblock(@PathVariable String targetUsername, org.springframework.security.core.Authentication auth) {
-        return userService.unblockUser(auth.getName(), targetUsername);
+    @PutMapping("/profile")
+    public UserProfileResponse updateProfile(@RequestParam String displayName,
+                                             org.springframework.security.core.Authentication auth) {
+        return toResponse(userService.updateProfile(auth.getName(), displayName));
     }
 
     @DeleteMapping("/me")
@@ -54,8 +48,25 @@ public class UserController {
         userService.deleteAccount(auth.getName());
     }
 
-    @PutMapping("/privacy")
-    public User updatePrivacy(@RequestParam boolean ghostMode, @RequestParam boolean showLastSeen, org.springframework.security.core.Authentication auth) {
-        return userService.updatePrivacy(auth.getName(), ghostMode, showLastSeen);
+    @PostMapping("/password")
+    public void changePassword(@RequestBody ChangePasswordRequest request,
+                               org.springframework.security.core.Authentication auth) {
+        userService.changePassword(auth.getName(), request.getCurrentPassword(), request.getNewPassword());
+    }
+
+    private UserProfileResponse toResponse(com.learnerview.chitchat.entities.User user) {
+        return new UserProfileResponse(
+                user.getUsername(),
+                user.getDisplayName(),
+                user.getCreatedAt()
+        );
+    }
+
+    @Data
+    public static class ChangePasswordRequest {
+        @NotBlank
+        private String currentPassword;
+        @NotBlank
+        private String newPassword;
     }
 }

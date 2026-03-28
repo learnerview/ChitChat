@@ -11,20 +11,13 @@ import java.util.Optional;
 
 @Repository
 public interface ConversationRepository extends MongoRepository<Conversation, String> {
-    
-    List<Conversation> findByType(ConversationType type);
-    
-    List<Conversation> findByOwnerId(String ownerId);
-    
-    Optional<Conversation> findByHandle(String handle);
-    
-    boolean existsByHandle(String handle);
-    
-    List<Conversation> findByNameContainingIgnoreCaseOrHandleContainingIgnoreCase(String name, String handle);
-    
-    @Query("{'users': ?0}")
-    List<Conversation> findByUsersContaining(String username);
-    
-    @Query("{'users': {$all: [?0, ?1]}, 'type': 'DM'}")
-    Optional<Conversation> findDMByUsers(String user1, String user2);
+    List<Conversation> findByTenantIdAndType(String tenantId, ConversationType type);
+
+    Optional<Conversation> findByIdAndTenantId(String id, String tenantId);
+
+    @Query("{'tenantId': ?0, 'participants': ?1}")
+    List<Conversation> findByTenantIdAndParticipantsContaining(String tenantId, String username);
+
+    @Query("{'tenantId': ?0, 'participants': {$all: [?1, ?2]}, 'type': 'DM'}")
+    Optional<Conversation> findDirectConversation(String tenantId, String user1, String user2);
 }

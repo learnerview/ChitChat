@@ -1,282 +1,217 @@
 package com.learnerview.chitchat.service.impl;
 
-import com.learnerview.chitchat.entities.*;
-import com.learnerview.chitchat.repositories.*;
+import com.learnerview.chitchat.entities.Conversation;
+import com.learnerview.chitchat.entities.ConversationType;
+import com.learnerview.chitchat.repositories.ConversationRepository;
+import com.learnerview.chitchat.repositories.UserRepository;
 import com.learnerview.chitchat.service.ConversationService;
-import org.springframework.beans.factory.annotation.Autowired;
+import com.learnerview.chitchat.service.EventPublisherService;
+import com.learnerview.chitchat.tenant.TenantContext;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
+import java.util.HashSet;
 import java.util.List;
-import java.util.Optional;
-import java.util.UUID;
+import java.util.Map;
+import java.util.Set;
 
 @Service
 public class ConversationServiceImpl implements ConversationService {
 
-    @Autowired
-    private ConversationRepository conversationRepository;
-    
-    @Autowired
-    private UserRepository userRepository;
-    
-    @Autowired
-    private ConversationMembershipRepository membershipRepository;
+    private final ConversationRepository conversationRepository;
+    private final UserRepository userRepository;
+    private final EventPublisherService eventPublisherService;
 
-    @Override
-    public Conversation createDM(String username1, String username2) {
-        // Check if DM already exists
-        Optional<Conversation> existing = conversationRepository.findDMByUsers(username1, username2);
-        if (existing.isPresent()) {
-            return existing.get();
-        }
-        
-        // Verify users exist
-        if (!userRepository.existsByUsername(username1) || !userRepository.existsByUsername(username2)) {
-            throw new RuntimeException("One or both users not found");
-        }
-        
-        Conversation dm = Conversation.builder()
-                .type(ConversationType.DM)
-                .users(List.of(username1, username2))
-                .memberCount(2)
-                .createdAt(LocalDateTime.now())
-                .build();
-        
-        dm = conversationRepository.save(dm);
-        
-        // Add memberships
-        createMembership(dm.getId(), username1, MembershipRole.MEMBER);
-        createMembership(dm.getId(), username2, MembershipRole.MEMBER);
-        
-        return dm;
+    public ConversationServiceImpl(ConversationRepository conversationRepository,
+                                   UserRepository userRepository,
+                                   EventPublisherService eventPublisherService) {
+        this.conversationRepository = conversationRepository;
+        this.userRepository = userRepository;
+        this.eventPublisherService = eventPublisherService;
     }
 
     @Override
-    public Conversation createGroup(String name, String ownerUsername, boolean isPublic, String description, String handle) {
-        if (!userRepository.existsByUsername(ownerUsername)) {
-            throw new RuntimeException("Owner not found");
+    public Conversation createDirectConversation(String currentUser, String otherUser) {
+        String tenantId = TenantContext.getRequiredTenantId();
+        if (currentUser.equals(otherUser)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Cannot create direct conversation with yourself");
         }
-        
-        if (isPublic && handle != null && conversationRepository.existsByHandle(handle)) {
-            throw new RuntimeException("Handle already exists");
+        if (!userRepository.existsByTenantIdAndUsername(tenantId, otherUser)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found");
         }
-        
-        ConversationType type = isPublic ? ConversationType.PUBLIC_GROUP : ConversationType.PRIVATE_GROUP;
-        
-        Conversation group = Conversation.builder()
-                .type(type)
-                .name(name)
-                .handle(isPublic ? handle : null)
-                .description(description)
-                .ownerId(ownerUsername)
-                .memberCount(1)
-                .createdAt(LocalDateTime.now())
-                .inviteLink(isPublic ? null : UUID.randomUUID().toString())
-                .build();
-        
-        group = conversationRepository.save(group);
-        
-        // Add owner as admin
-        createMembership(group.getId(), ownerUsername, MembershipRole.OWNER);
-        
-        return group;
+
+        return conversationRepository.findDirectConversation(tenantId, currentUser, otherUser).orElseGet(() -> {
+            Set<String> participants = new HashSet<>();
+            participants.add(currentUser);
+            participants.add(otherUser);
+
+            Conversation conversation = Conversation.builder()
+                    .tenantId(tenantId)
+                    .type(ConversationType.DM)
+                    .createdBy(currentUser)
+                    .createdAt(LocalDateTime.now())
+                    .participants(participants)
+                    .build();
+
+            Conversation saved = conversationRepository.save(conversation);
+            eventPublisherService.publish(tenantId, "conversation.created", Map.of(
+                    "conversationId", saved.getId(),
+                    "type", saved.getType().name(),
+                    "createdBy", saved.getCreatedBy()
+            ));
+            return saved;
+        });
     }
 
     @Override
-    public List<Conversation> getMyConversations(String username) {
-        List<ConversationMembership> memberships = membershipRepository.findByUsernameAndStatus(username, MembershipStatus.APPROVED);
-        return memberships.stream()
-                .map(m -> conversationRepository.findById(m.getConversationId()).orElse(null))
-                .filter(c -> c != null)
-                .toList();
-    }
-
-    @Override
-    public Conversation getConversation(String id) {
-        return conversationRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("Conversation not found"));
-    }
-
-    @Override
-    public List<Conversation> getPublicConversations(String username) {
-        return conversationRepository.findByType(ConversationType.PUBLIC_GROUP);
-    }
-
-    @Override
-    public Conversation joinPublicConversation(String conversationId, String username) {
-        Conversation conversation = getConversation(conversationId);
-        
-        if (conversation.getType() != ConversationType.PUBLIC_GROUP) {
-            throw new RuntimeException("Only public groups can be joined directly");
+    public Conversation createGroupConversation(String currentUser, String name, Set<String> members) {
+        String tenantId = TenantContext.getRequiredTenantId();
+        if (name == null || name.trim().isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Group name is required");
         }
-        
-        Optional<ConversationMembership> existing = membershipRepository
-                .findByConversationIdAndUsername(conversationId, username);
-        
-        if (existing.isPresent()) {
-            if (existing.get().getStatus() == MembershipStatus.APPROVED) {
-                return conversation;
+
+        Set<String> participants = new HashSet<>();
+        participants.add(currentUser);
+        if (members != null) {
+            Set<String> sanitizedMembers = members.stream()
+                    .filter(m -> m != null && !m.isBlank())
+                    .map(String::trim)
+                    .collect(java.util.stream.Collectors.toSet());
+                    
+            for (String member : sanitizedMembers) {
+                if (!member.matches("^[a-zA-Z0-9_]+$")) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid username format: " + member);
+                }
+                if (!userRepository.existsByTenantIdAndUsername(tenantId, member)) {
+                    throw new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found: " + member);
+                }
             }
-            throw new RuntimeException("Already requested to join this conversation");
+            participants.addAll(sanitizedMembers);
         }
-        
-        createMembership(conversationId, username, MembershipRole.MEMBER);
-        
-        conversation.setMemberCount(conversation.getMemberCount() + 1);
+
+        Conversation conversation = Conversation.builder()
+                .tenantId(tenantId)
+                .type(ConversationType.GROUP)
+                .name(name.trim())
+                .createdBy(currentUser)
+                .createdAt(LocalDateTime.now())
+                .participants(participants)
+                .build();
+
+        Conversation saved = conversationRepository.save(conversation);
+        eventPublisherService.publish(tenantId, "conversation.created", Map.of(
+                "conversationId", saved.getId(),
+                "type", saved.getType().name(),
+                "createdBy", saved.getCreatedBy(),
+                "name", saved.getName()
+        ));
+        return saved;
+    }
+
+    @Override
+    public List<Conversation> listForUser(String username) {
+        return conversationRepository.findByTenantIdAndParticipantsContaining(TenantContext.getRequiredTenantId(), username);
+    }
+
+    @Override
+    public Conversation getForUser(String conversationId, String username) {
+        String tenantId = TenantContext.getRequiredTenantId();
+        Conversation conversation = conversationRepository.findByIdAndTenantId(conversationId, tenantId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Conversation not found"));
+
+        if (!conversation.getParticipants().contains(username)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Not a participant of this conversation");
+        }
+
+        return conversation;
+    }
+
+    @Override
+    public Conversation renameConversation(String conversationId, String username, String newName) {
+        Conversation conversation = getForUser(conversationId, username);
+        assertGroupOwner(conversation, username);
+
+        if (newName == null || newName.trim().isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Conversation name is required");
+        }
+
+        conversation.setName(newName.trim());
         return conversationRepository.save(conversation);
     }
 
     @Override
-    public void deleteConversation(String conversationId, String username) {
-        Conversation conversation = getConversation(conversationId);
-        
-        if (!conversation.getOwnerId().equals(username)) {
-            throw new RuntimeException("Only owner can delete conversation");
+    public Conversation addParticipant(String conversationId, String requester, String participantUsername) {
+        Conversation conversation = getForUser(conversationId, requester);
+        assertGroupOwner(conversation, requester);
+
+        if (!userRepository.existsByTenantIdAndUsername(TenantContext.getRequiredTenantId(), participantUsername)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found");
+        }
+        if (conversation.getParticipants().contains(participantUsername)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "User is already a participant");
+        }
+
+        conversation.getParticipants().add(participantUsername);
+        return conversationRepository.save(conversation);
+    }
+
+    @Override
+    public Conversation removeParticipant(String conversationId, String requester, String participantUsername) {
+        Conversation conversation = getForUser(conversationId, requester);
+        assertGroupOwner(conversation, requester);
+
+        if (conversation.getCreatedBy().equals(participantUsername)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Owner cannot be removed");
+        }
+        if (!conversation.getParticipants().contains(participantUsername)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "User is not a participant");
+        }
+
+        conversation.getParticipants().remove(participantUsername);
+        return conversationRepository.save(conversation);
+    }
+
+    @Override
+    public Conversation transferOwnership(String conversationId, String username, String newOwner) {
+        Conversation conversation = getForUser(conversationId, username);
+        assertGroupOwner(conversation, username);
+
+        if (newOwner == null || newOwner.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "New owner is required");
+        }
+        newOwner = newOwner.trim();
+
+        if (username.equals(newOwner)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "New owner must be different from current owner");
+        }
+
+        if (!conversation.getParticipants().contains(newOwner)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "New owner must be a current participant");
         }
         
-        conversationRepository.delete(conversation);
-        membershipRepository.deleteByConversationIdAndUsername(conversationId, username);
+        conversation.setCreatedBy(newOwner);
+        return conversationRepository.save(conversation);
     }
 
     @Override
     public void leaveConversation(String conversationId, String username) {
-        ConversationMembership membership = membershipRepository
-                .findByConversationIdAndUsername(conversationId, username)
-                .orElseThrow(() -> new RuntimeException("Not a member of this conversation"));
-        
-        if (membership.getRole() == MembershipRole.OWNER) {
-            throw new RuntimeException("Owner cannot leave. Transfer ownership first");
+        Conversation conversation = getForUser(conversationId, username);
+        if (conversation.getType() == ConversationType.GROUP && conversation.getCreatedBy().equals(username)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Owner cannot leave. Transfer ownership first");
         }
-        
-        membership.setStatus(MembershipStatus.LEFT);
-        membershipRepository.save(membership);
-        
-        Conversation conversation = getConversation(conversationId);
-        conversation.setMemberCount(Math.max(0, conversation.getMemberCount() - 1));
+
+        conversation.getParticipants().remove(username);
         conversationRepository.save(conversation);
     }
 
-    @Override
-    public Conversation updateSettings(String conversationId, boolean adminOnlyMessaging, String username) {
-        Conversation conversation = getConversation(conversationId);
-        
-        ConversationMembership membership = membershipRepository
-                .findByConversationIdAndUsername(conversationId, username)
-                .orElseThrow(() -> new RuntimeException("Not a member of this conversation"));
-        
-        if (membership.getRole() != MembershipRole.OWNER && membership.getRole() != MembershipRole.ADMIN) {
-            throw new RuntimeException("Only admins can update settings");
+    private void assertGroupOwner(Conversation conversation, String username) {
+        if (conversation.getType() != ConversationType.GROUP) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Operation is only valid for group conversations");
         }
-        
-        conversation.setAdminOnlyMessaging(adminOnlyMessaging);
-        return conversationRepository.save(conversation);
-    }
-
-    @Override
-    public Conversation updateGroup(String conversationId, String name, String description, String username) {
-        Conversation conversation = getConversation(conversationId);
-        
-        ConversationMembership membership = membershipRepository
-                .findByConversationIdAndUsername(conversationId, username)
-                .orElseThrow(() -> new RuntimeException("Not a member of this conversation"));
-        
-        if (membership.getRole() != MembershipRole.OWNER && membership.getRole() != MembershipRole.ADMIN) {
-            throw new RuntimeException("Only admins can update group");
+        if (!username.equals(conversation.getCreatedBy())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Only conversation owner can perform this action");
         }
-        
-        if (name != null) conversation.setName(name);
-        if (description != null) conversation.setDescription(description);
-        
-        return conversationRepository.save(conversation);
-    }
-
-    @Override
-    public String generateInviteLink(String conversationId, String username) {
-        Conversation conversation = getConversation(conversationId);
-        
-        if (conversation.getType() == ConversationType.PUBLIC_GROUP) {
-            throw new RuntimeException("Public groups don't need invite links");
-        }
-        
-        ConversationMembership membership = membershipRepository
-                .findByConversationIdAndUsername(conversationId, username)
-                .orElseThrow(() -> new RuntimeException("Not a member of this conversation"));
-        
-        if (membership.getRole() != MembershipRole.OWNER && membership.getRole() != MembershipRole.ADMIN) {
-            throw new RuntimeException("Only admins can generate invite links");
-        }
-        
-        String inviteLink = UUID.randomUUID().toString();
-        conversation.setInviteLink(inviteLink);
-        conversationRepository.save(conversation);
-        
-        return inviteLink;
-    }
-
-    @Override
-    public void revokeInviteLink(String conversationId, String username) {
-        Conversation conversation = getConversation(conversationId);
-        
-        ConversationMembership membership = membershipRepository
-                .findByConversationIdAndUsername(conversationId, username)
-                .orElseThrow(() -> new RuntimeException("Not a member of this conversation"));
-        
-        if (membership.getRole() != MembershipRole.OWNER && membership.getRole() != MembershipRole.ADMIN) {
-            throw new RuntimeException("Only admins can revoke invite links");
-        }
-        
-        conversation.setInviteLink(null);
-        conversationRepository.save(conversation);
-    }
-
-    @Override
-    public Conversation joinViaInviteLink(String inviteCode, String username) {
-        Conversation conversation = conversationRepository.findAll().stream()
-                .filter(c -> inviteCode.equals(c.getInviteLink()))
-                .findFirst()
-                .orElseThrow(() -> new RuntimeException("Invalid invite link"));
-        
-        if (conversation.getType() != ConversationType.PRIVATE_GROUP) {
-            throw new RuntimeException("Invite links only work for private groups");
-        }
-        
-        Optional<ConversationMembership> existing = membershipRepository
-                .findByConversationIdAndUsername(conversation.getId(), username);
-        
-        if (existing.isPresent()) {
-            throw new RuntimeException("Already a member of this conversation");
-        }
-        
-        createMembership(conversation.getId(), username, MembershipRole.MEMBER);
-        
-        conversation.setMemberCount(conversation.getMemberCount() + 1);
-        return conversationRepository.save(conversation);
-    }
-
-    @Override
-    public void togglePin(String conversationId, String username) {
-        ConversationMembership membership = membershipRepository
-                .findByConversationIdAndUsername(conversationId, username)
-                .orElseThrow(() -> new RuntimeException("Not a member of this conversation"));
-        
-        membership.setPinned(!membership.isPinned());
-        membershipRepository.save(membership);
-    }
-
-    @Override
-    public void toggleMute(String conversationId, String username) {
-        ConversationMembership membership = membershipRepository
-                .findByConversationIdAndUsername(conversationId, username)
-                .orElseThrow(() -> new RuntimeException("Not a member of this conversation"));
-        
-        membership.setMuted(!membership.isMuted());
-        membershipRepository.save(membership);
-    }
-    
-    private void createMembership(String conversationId, String username, MembershipRole role) {
-        ConversationMembership membership = new ConversationMembership(conversationId, username);
-        membership.setRole(role);
-        membershipRepository.save(membership);
     }
 }

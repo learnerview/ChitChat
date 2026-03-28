@@ -2,6 +2,7 @@ package com.learnerview.chitchat.service.impl;
 
 import com.learnerview.chitchat.entities.User;
 import com.learnerview.chitchat.repositories.UserRepository;
+import com.learnerview.chitchat.tenant.TenantContext;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
@@ -16,13 +17,13 @@ public class MongoUserDetailsService implements UserDetailsService {
 
     @Override
     public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
-        User user = userRepository.findByUsername(username)
-                .orElseThrow(() -> new UsernameNotFoundException("User not found: " + username));
+        String tenantId = TenantContext.getRequiredTenantId();
+        User user = userRepository.findByTenantIdAndUsername(tenantId, username)
+            .orElseThrow(() -> new UsernameNotFoundException("User not found"));
         
-        return org.springframework.security.core.userdetails.User.builder()
-                .username(user.getUsername())
-                .password(user.getPassword())
-                .roles("USER")
-                .build();
+        return org.springframework.security.core.userdetails.User.withUsername(user.getUsername())
+            .password(user.getPassword())
+            .roles("USER")
+            .build();
     }
 }

@@ -2,66 +2,63 @@ package com.learnerview.chitchat.controllers;
 
 import com.learnerview.chitchat.entities.Conversation;
 import com.learnerview.chitchat.service.ConversationService;
-import jakarta.validation.Valid;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Set;
 
 @RestController
 @RequestMapping("/api/conversations")
 public class ConversationController {
 
-    @Autowired
-    private ConversationService conversationService;
+    private final ConversationService conversationService;
+
+    public ConversationController(ConversationService conversationService) {
+        this.conversationService = conversationService;
+    }
 
     @PostMapping("/dm")
-    public Conversation createDM(@RequestParam String withUser, Authentication auth) {
-        return conversationService.createDM(auth.getName(), withUser);
+    public Conversation createDM(@RequestParam("with") String withUser, Authentication auth) {
+        return conversationService.createDirectConversation(auth.getName(), withUser);
     }
 
     @PostMapping("/group")
-    public Conversation createGroup(
-            @RequestParam String name, 
-            @RequestParam boolean isPublic, 
-            @RequestParam(required = false) String description,
-            @RequestParam(required = false) String handle,
-            Authentication auth) {
-        return conversationService.createGroup(name, auth.getName(), isPublic, description, handle);
+    public Conversation createGroup(@RequestParam String name,
+                                    @RequestBody(required = false) Set<String> members,
+                                    Authentication auth) {
+        return conversationService.createGroupConversation(auth.getName(), name, members);
     }
 
-    @PostMapping("/private-group")
-    public Conversation createPrivateGroup(
-            @RequestParam String name, 
-            @RequestParam(required = false) String description,
-            Authentication auth) {
-        return conversationService.createGroup(name, auth.getName(), false, description, null);
-    }
-
-    @GetMapping("/my")
-    public List<Conversation> getMyConversations(Authentication auth) {
-        return conversationService.getMyConversations(auth.getName());
+    @GetMapping
+    public List<Conversation> listMyConversations(Authentication auth) {
+        return conversationService.listForUser(auth.getName());
     }
 
     @GetMapping("/{id}")
-    public Conversation getConversation(@PathVariable String id) {
-        return conversationService.getConversation(id);
+    public Conversation getConversation(@PathVariable String id, Authentication auth) {
+        return conversationService.getForUser(id, auth.getName());
     }
 
-    @GetMapping("/public")
-    public List<Conversation> getPublicConversations(Authentication auth) {
-        return conversationService.getPublicConversations(auth.getName());
+    @PatchMapping("/{id}/name")
+    public Conversation renameConversation(@PathVariable String id,
+                                           @RequestParam String name,
+                                           Authentication auth) {
+        return conversationService.renameConversation(id, auth.getName(), name);
     }
 
-    @PostMapping("/{id}/join")
-    public Conversation joinPublicConversation(@PathVariable String id, Authentication auth) {
-        return conversationService.joinPublicConversation(id, auth.getName());
+    @PostMapping("/{id}/participants")
+    public Conversation addParticipant(@PathVariable String id,
+                                       @RequestParam("username") String participantUsername,
+                                       Authentication auth) {
+        return conversationService.addParticipant(id, auth.getName(), participantUsername);
     }
 
-    @DeleteMapping("/{id}")
-    public void deleteConversation(@PathVariable String id, Authentication auth) {
-        conversationService.deleteConversation(id, auth.getName());
+    @DeleteMapping("/{id}/participants/{username}")
+    public Conversation removeParticipant(@PathVariable String id,
+                                          @PathVariable String username,
+                                          Authentication auth) {
+        return conversationService.removeParticipant(id, auth.getName(), username);
     }
 
     @PostMapping("/{id}/leave")
@@ -69,38 +66,10 @@ public class ConversationController {
         conversationService.leaveConversation(id, auth.getName());
     }
 
-    @PutMapping("/{id}/settings")
-    public Conversation updateSettings(@PathVariable String id, @RequestParam boolean adminOnlyMessaging, Authentication auth) {
-        return conversationService.updateSettings(id, adminOnlyMessaging, auth.getName());
-    }
-
-    @PutMapping("/{id}")
-    public Conversation updateGroup(@PathVariable String id, @Valid @RequestBody Conversation updates, Authentication auth) {
-        return conversationService.updateGroup(id, updates.getName(), updates.getDescription(), auth.getName());
-    }
-
-    @PostMapping("/{id}/invite")
-    public String generateInviteLink(@PathVariable String id, Authentication auth) {
-        return conversationService.generateInviteLink(id, auth.getName());
-    }
-
-    @DeleteMapping("/{id}/invite")
-    public void revokeInviteLink(@PathVariable String id, Authentication auth) {
-        conversationService.revokeInviteLink(id, auth.getName());
-    }
-
-    @PostMapping("/join/{inviteCode}")
-    public Conversation joinViaInviteLink(@PathVariable String inviteCode, Authentication auth) {
-        return conversationService.joinViaInviteLink(inviteCode, auth.getName());
-    }
-
-    @PostMapping("/{id}/pin")
-    public void togglePin(@PathVariable String id, Authentication auth) {
-        conversationService.togglePin(id, auth.getName());
-    }
-
-    @PostMapping("/{id}/mute")
-    public void toggleMute(@PathVariable String id, Authentication auth) {
-        conversationService.toggleMute(id, auth.getName());
+    @PostMapping("/{id}/transfer")
+    public Conversation transferOwnership(@PathVariable String id,
+                                          @RequestParam("to") String newOwner,
+                                          Authentication auth) {
+        return conversationService.transferOwnership(id, auth.getName(), newOwner);
     }
 }

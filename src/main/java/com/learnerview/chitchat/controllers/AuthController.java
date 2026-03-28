@@ -6,11 +6,8 @@ import com.learnerview.chitchat.dto.RegisterRequest;
 import com.learnerview.chitchat.entities.User;
 import com.learnerview.chitchat.security.JwtTokenProvider;
 import com.learnerview.chitchat.service.UserService;
-import com.learnerview.chitchat.service.RateLimitingService;
-import io.github.bucket4j.ConsumptionProbe;
-import jakarta.servlet.http.HttpServletRequest;
+import com.learnerview.chitchat.tenant.TenantContext;
 import jakarta.validation.Valid;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -23,30 +20,19 @@ import org.springframework.web.bind.annotation.*;
 public class AuthController {
 
     private final UserService userService;
-    private final RateLimitingService rateLimitingService;
     private final AuthenticationManager authenticationManager;
     private final JwtTokenProvider tokenProvider;
 
-    public AuthController(UserService userService, 
-                        RateLimitingService rateLimitingService,
+    public AuthController(UserService userService,
                         AuthenticationManager authenticationManager,
                         JwtTokenProvider tokenProvider) {
         this.userService = userService;
-        this.rateLimitingService = rateLimitingService;
         this.authenticationManager = authenticationManager;
         this.tokenProvider = tokenProvider;
     }
 
     @PostMapping("/login")
-    public ResponseEntity<?> login(@Valid @RequestBody LoginRequest loginRequest, HttpServletRequest request) {
-        // Rate limiting by IP
-        String clientIp = request.getRemoteAddr();
-        ConsumptionProbe probe = rateLimitingService.resolveBucket(clientIp).tryConsumeAndReturnRemaining(1);
-        if (!probe.isConsumed()) {
-            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
-                    .body("Too many attempts. Please try again later.");
-        }
-
+    public ResponseEntity<AuthResponse> login(@Valid @RequestBody LoginRequest loginRequest) {
         Authentication authentication = authenticationManager.authenticate(
             new UsernamePasswordAuthenticationToken(
                 loginRequest.getUsername(),
@@ -56,7 +42,7 @@ public class AuthController {
 
         SecurityContextHolder.getContext().setAuthentication(authentication);
         
-        String jwt = tokenProvider.generateToken(authentication);
+        String jwt = tokenProvider.generateToken(authentication, TenantContext.getRequiredTenantId());
         
         User user = userService.findByUsername(loginRequest.getUsername())
                 .orElseThrow(() -> new RuntimeException("User not found"));
@@ -67,16 +53,7 @@ public class AuthController {
     }
 
     @PostMapping("/register")
-    public ResponseEntity<?> register(@Valid @RequestBody RegisterRequest registerRequest, 
-                                    HttpServletRequest request) {
-        // Rate limiting by IP
-        String clientIp = request.getRemoteAddr();
-        ConsumptionProbe probe = rateLimitingService.resolveBucket(clientIp).tryConsumeAndReturnRemaining(1);
-        if (!probe.isConsumed()) {
-            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
-                    .body("Too many attempts. Please try again later.");
-        }
-        
+    public ResponseEntity<String> register(@Valid @RequestBody RegisterRequest registerRequest) {
         if (userService.findByUsername(registerRequest.getUsername()).isPresent()) {
             return ResponseEntity.badRequest().body("Username already taken");
         }
@@ -85,10 +62,23 @@ public class AuthController {
         user.setUsername(registerRequest.getUsername());
         user.setPassword(registerRequest.getPassword());
         user.setDisplayName(registerRequest.getDisplayName());
-        user.setBio(registerRequest.getBio());
-        
+
         userService.register(user);
-        
+
         return ResponseEntity.ok("Registration successful. Please login.");
+    }
+
+    @PostMapping("/exchange")
+    public ResponseEntity<AuthResponse> exchangeExternalToken(Authentication authentication) {
+        if (authentication == null) {
+            return ResponseEntity.status(401).build();
+        }
+
+        User user = userService.findByUsername(authentication.getName())
+                .orElseThrow(() -> new RuntimeException("User not found"));
+
+        String jwt = tokenProvider.generateTokenForUsername(user.getUsername(), TenantContext.getRequiredTenantId());
+
+        return ResponseEntity.ok(new AuthResponse(jwt, user.getUsername(), user.getDisplayName()));
     }
 }

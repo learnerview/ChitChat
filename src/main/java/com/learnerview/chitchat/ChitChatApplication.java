@@ -10,5 +10,3 @@ public class ChitChatApplication {
     }
 }
 
-// 2025-11-25 11:08:14 auth.java
-
