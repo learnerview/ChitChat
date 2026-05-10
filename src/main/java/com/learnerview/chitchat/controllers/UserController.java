@@ -1,9 +1,8 @@
 package com.learnerview.chitchat.controllers;
 
+import com.learnerview.chitchat.dto.ChangePasswordRequest;
 import com.learnerview.chitchat.dto.UserProfileResponse;
 import com.learnerview.chitchat.service.UserService;
-import jakarta.validation.constraints.NotBlank;
-import lombok.Data;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -49,7 +48,7 @@ public class UserController {
     }
 
     @PostMapping("/password")
-    public void changePassword(@RequestBody ChangePasswordRequest request,
+    public void changePassword(@jakarta.validation.Valid @RequestBody ChangePasswordRequest request,
                                org.springframework.security.core.Authentication auth) {
         userService.changePassword(auth.getName(), request.getCurrentPassword(), request.getNewPassword());
     }
@@ -60,13 +59,5 @@ public class UserController {
                 user.getDisplayName(),
                 user.getCreatedAt()
         );
-    }
-
-    @Data
-    public static class ChangePasswordRequest {
-        @NotBlank
-        private String currentPassword;
-        @NotBlank
-        private String newPassword;
     }
 }

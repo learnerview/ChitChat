@@ -2,6 +2,7 @@ package com.learnerview.chitchat.security;
 
 import com.learnerview.chitchat.entities.Conversation;
 import com.learnerview.chitchat.repositories.ConversationRepository;
+import com.learnerview.chitchat.repositories.UserRepository;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageChannel;
 import org.springframework.messaging.simp.stomp.StompCommand;
@@ -22,9 +23,11 @@ public class WebSocketSubscriptionInterceptor implements ChannelInterceptor {
     private static final Pattern CONVERSATION_TOPIC_PATTERN = Pattern.compile("^/topic/conversations/([^/]+)$");
 
     private final ConversationRepository conversationRepository;
+    private final UserRepository userRepository;
 
-    public WebSocketSubscriptionInterceptor(ConversationRepository conversationRepository) {
+    public WebSocketSubscriptionInterceptor(ConversationRepository conversationRepository, UserRepository userRepository) {
         this.conversationRepository = conversationRepository;
+        this.userRepository = userRepository;
     }
 
     @Override
@@ -59,10 +62,14 @@ public class WebSocketSubscriptionInterceptor implements ChannelInterceptor {
             }
 
             String username = principal.getName();
+            String userId = userRepository.findByUsername(username)
+                    .orElseThrow(() -> new AccessDeniedException("User not found"))
+                    .getId();
+            
             Conversation conversation = conversationRepository.findByIdAndTenantId(conversationId, tenantId)
                     .orElseThrow(() -> new AccessDeniedException("Conversation not found"));
 
-            if (!conversation.getParticipants().contains(username)) {
+            if (!conversation.getParticipantIds().contains(userId)) {
                 throw new AccessDeniedException("Not allowed to subscribe to this conversation");
             }
         }

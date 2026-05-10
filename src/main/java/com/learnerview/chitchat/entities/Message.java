@@ -20,7 +20,7 @@ public class Message {
     private String tenantId;
 
     private String conversationId;
-    private String sender;
+    private String senderId; // Changed from 'sender' - now stores userId, not username
 
     private String content;
 

@@ -1,10 +1,9 @@
 package com.learnerview.chitchat.controllers;
 
+import com.learnerview.chitchat.dto.RealtimeMessageRequest;
 import com.learnerview.chitchat.entities.Message;
 import com.learnerview.chitchat.service.MessageService;
 import com.learnerview.chitchat.tenant.TenantContext;
-import jakarta.validation.constraints.NotBlank;
-import lombok.Data;
 import org.springframework.messaging.handler.annotation.DestinationVariable;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.Payload;
@@ -59,12 +58,5 @@ public class RealtimeMessageController {
         }
         Object value = sessionAttributes.get("tenantId");
         return value == null ? null : value.toString();
-    }
-
-    @Data
-    public static class RealtimeMessageRequest {
-        @NotBlank
-        private String content;
-        private String replyToId;
     }
 }

@@ -42,6 +42,10 @@ public class TenantHeaderFilter extends OncePerRequestFilter {
             return false;
         }
         String path = request.getRequestURI();
+        // Skip tenant header validation for auth and workspace management endpoints
+        if (path.startsWith("/api/auth") || path.startsWith("/api/workspaces") || path.equals("/api/invites/accept")) {
+            return false;
+        }
         return path.startsWith("/api/") || path.startsWith("/ws");
     }
 }

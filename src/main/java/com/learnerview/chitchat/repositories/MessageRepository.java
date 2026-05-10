@@ -16,4 +16,8 @@ public interface MessageRepository extends MongoRepository<Message, String> {
     Page<Message> findByTenantIdAndConversationId(String tenantId, String conversationId, Pageable pageable);
 
     Optional<Message> findByIdAndTenantId(String id, String tenantId);
+    
+    List<Message> findByTenantIdAndConversationIdAndContentContainingIgnoreCase(String tenantId, String conversationId, String query);
+    
+    List<Message> findByTenantIdAndConversationIdInAndContentContainingIgnoreCase(String tenantId, java.util.Collection<String> conversationIds, String query);
 }

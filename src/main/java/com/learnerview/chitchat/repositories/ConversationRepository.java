@@ -15,9 +15,9 @@ public interface ConversationRepository extends MongoRepository<Conversation, St
 
     Optional<Conversation> findByIdAndTenantId(String id, String tenantId);
 
-    @Query("{'tenantId': ?0, 'participants': ?1}")
-    List<Conversation> findByTenantIdAndParticipantsContaining(String tenantId, String username);
+    @Query("{'tenantId': ?0, 'participantIds': ?1}")
+    List<Conversation> findByTenantIdAndParticipantIdsContaining(String tenantId, String userId);
 
-    @Query("{'tenantId': ?0, 'participants': {$all: [?1, ?2]}, 'type': 'DM'}")
-    Optional<Conversation> findDirectConversation(String tenantId, String user1, String user2);
+    @Query("{'tenantId': ?0, 'participantIds': {$all: [?1, ?2]}, 'type': 'DM'}")
+    Optional<Conversation> findDirectConversation(String tenantId, String user1Id, String user2Id);
 }

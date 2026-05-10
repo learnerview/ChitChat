@@ -19,4 +19,8 @@ public interface MessageService {
     Message editMessage(String messageId, String editor, String updatedContent);
 
     void deleteMessage(String messageId, String requester);
+
+    List<Message> searchMessages(String conversationId, String username, String query);
+
+    List<Message> searchAllMyMessages(String username, String query);
 }

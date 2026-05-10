@@ -1,9 +1,8 @@
 package com.learnerview.chitchat.controllers;
 
+import com.learnerview.chitchat.dto.RegisterWebhookRequest;
 import com.learnerview.chitchat.entities.WebhookSubscription;
 import com.learnerview.chitchat.service.WebhookService;
-import jakarta.validation.constraints.NotBlank;
-import lombok.Data;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -26,7 +25,7 @@ public class WebhookController {
     }
 
     @PostMapping
-    public WebhookSubscription register(@RequestBody RegisterWebhookRequest request) {
+    public WebhookSubscription register(@jakarta.validation.Valid @RequestBody RegisterWebhookRequest request) {
         return webhookService.register(request.getUrl(), request.getEvents(), request.getSecret());
     }
 
@@ -38,13 +37,5 @@ public class WebhookController {
     @DeleteMapping("/{id}")
     public void delete(@PathVariable String id) {
         webhookService.delete(id);
-    }
-
-    @Data
-    public static class RegisterWebhookRequest {
-        @NotBlank
-        private String url;
-        private Set<String> events;
-        private String secret;
     }
 }

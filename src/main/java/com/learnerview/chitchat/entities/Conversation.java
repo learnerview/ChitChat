@@ -17,9 +17,9 @@ import java.util.Set;
 @Builder
 @Document(collection = "conversations")
 @CompoundIndexes({
-    @CompoundIndex(def = "{'tenantId': 1, 'participants': 1}"),
+    @CompoundIndex(def = "{'tenantId': 1, 'participantIds': 1}"),
     @CompoundIndex(def = "{'tenantId': 1, 'createdAt': -1}"),
-    @CompoundIndex(def = "{'tenantId': 1, 'type': 1, 'participants': 1}", unique = true, useGeneratedName = true, 
+    @CompoundIndex(def = "{'tenantId': 1, 'type': 1, 'participantIds': 1}", unique = true, useGeneratedName = true, 
                    name = "unique_dm_index")
 })
 public class Conversation {
@@ -33,10 +33,10 @@ public class Conversation {
     @Size(max = 100, message = "Name must be at most 100 characters")
     private String name;
 
-    private String createdBy;
+    private String createdBy; // Now stores userId, not username
     
     private LocalDateTime createdAt;
 
     @Builder.Default
-    private Set<String> participants = new HashSet<>();
+    private Set<String> participantIds = new HashSet<>(); // Changed from 'participants' - now stores userIds, not usernames
 }

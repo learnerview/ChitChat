@@ -1,8 +1,9 @@
 package com.learnerview.chitchat.controllers;
 
+import com.learnerview.chitchat.dto.EditMessageRequest;
+import com.learnerview.chitchat.dto.SendMessageRequest;
 import com.learnerview.chitchat.entities.Message;
 import com.learnerview.chitchat.service.MessageService;
-import jakarta.validation.constraints.NotBlank;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -42,7 +43,7 @@ public class MessageController {
     @ResponseStatus(HttpStatus.CREATED)
     public Message sendMessage(
             @PathVariable String conversationId,
-            @RequestBody SendMessageRequest request,
+            @jakarta.validation.Valid @RequestBody SendMessageRequest request,
             org.springframework.security.core.Authentication auth
     ) {
         return messageService.sendMessage(conversationId, auth.getName(), request.getContent(), request.getReplyToId());
@@ -69,7 +70,7 @@ public class MessageController {
 
     @PatchMapping("/{messageId}")
     public Message editMessage(@PathVariable String messageId,
-                               @RequestBody EditMessageRequest request,
+                               @jakarta.validation.Valid @RequestBody EditMessageRequest request,
                                org.springframework.security.core.Authentication auth) {
         return messageService.editMessage(messageId, auth.getName(), request.getContent());
     }
@@ -81,17 +82,16 @@ public class MessageController {
         messageService.deleteMessage(messageId, auth.getName());
     }
 
-    @Data
-    public static class SendMessageRequest {
-        @NotBlank
-        private String content;
-        private String replyToId;
+    @GetMapping("/search")
+    public List<Message> searchAllMyMessages(@RequestParam String query,
+                                             org.springframework.security.core.Authentication auth) {
+        return messageService.searchAllMyMessages(auth.getName(), query);
     }
 
-    @Data
-    @NoArgsConstructor
-    public static class EditMessageRequest {
-        @NotBlank
-        private String content;
+    @GetMapping("/{conversationId}/search")
+    public List<Message> searchMessages(@PathVariable String conversationId,
+                                        @RequestParam String query,
+                                        org.springframework.security.core.Authentication auth) {
+        return messageService.searchMessages(conversationId, auth.getName(), query);
     }
 }

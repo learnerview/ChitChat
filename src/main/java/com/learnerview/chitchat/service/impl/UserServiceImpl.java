@@ -3,7 +3,6 @@ package com.learnerview.chitchat.service.impl;
 import com.learnerview.chitchat.entities.User;
 import com.learnerview.chitchat.repositories.UserRepository;
 import com.learnerview.chitchat.service.UserService;
-import com.learnerview.chitchat.tenant.TenantContext;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -26,12 +25,11 @@ public class UserServiceImpl implements UserService {
 
     @Override
     public User register(User user) {
-        String tenantId = TenantContext.getRequiredTenantId();
-        if (userRepository.existsByTenantIdAndUsername(tenantId, user.getUsername())) {
+        // Global user registration - no tenant involved
+        if (userRepository.existsByUsername(user.getUsername())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Username already exists");
         }
 
-        user.setTenantId(tenantId);
         user.setPassword(passwordEncoder.encode(user.getPassword()));
         user.setCreatedAt(LocalDateTime.now());
 
@@ -40,16 +38,15 @@ public class UserServiceImpl implements UserService {
 
     @Override
     public Optional<User> findByUsername(String username) {
-        return userRepository.findByTenantIdAndUsername(TenantContext.getRequiredTenantId(), username);
+        // Global user lookup - no tenant filtering
+        return userRepository.findByUsername(username);
     }
 
     @Override
     public List<User> searchUsers(String query) {
-        String tenantId = TenantContext.getRequiredTenantId();
-        return userRepository.findByTenantIdAndUsernameContainingIgnoreCaseOrTenantIdAndDisplayNameContainingIgnoreCase(
-                tenantId,
+        // Global user search - no tenant filtering
+        return userRepository.findByUsernameContainingIgnoreCaseOrDisplayNameContainingIgnoreCase(
                 query,
-                tenantId,
                 query
         );
     }

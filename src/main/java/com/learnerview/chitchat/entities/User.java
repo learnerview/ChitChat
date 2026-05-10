@@ -16,14 +16,11 @@ import java.time.LocalDateTime;
 @Builder
 @Document(collection = "users")
 @CompoundIndexes({
-    @CompoundIndex(def = "{'tenantId': 1, 'username': 1}", unique = true),
-    @CompoundIndex(def = "{'tenantId': 1, 'displayName': 1}")
+    @CompoundIndex(def = "{'username': 1}", unique = true)
 })
 public class User {
     @Id
     private String id;
-
-    private String tenantId;
 
     @NotBlank(message = "Username is required")
     @Size(min = 3, max = 40, message = "Username must be between 3 and 40 characters")

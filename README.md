@@ -91,15 +91,15 @@ Business logic and authorization rules. Services implement domain-specific contr
 
 ### Repositories
 
-MongoDB persistence layer. All queries are scoped by `tenantId` to prevent cross-tenant data leaks.
+MongoDB persistence layer. All business data (conversations, messages) are scoped by `tenantId`. Users are global entities that can belong to multiple workspaces via memberships.
 
 ### Entities
 
-Domain models stored in MongoDB. Each entity includes tenant isolation at the database level.
+Domain models stored in MongoDB. Each business entity includes tenant isolation. Users are shared across the system.
 
 ### Security
 
-JWT authentication filter validates bearer tokens and tenant claims. Stateless configuration with request-scoped tenant context.
+JWT authentication filter validates bearer tokens. A separate `TenantHeaderFilter` ensures each request specifies which workspace context it is operating in.
 
 ---
 
@@ -138,58 +138,97 @@ Response:
 ```json
 {
   "token": "eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9...",
+  "type": "Bearer",
   "username": "john",
-  "displayName": "John Doe"
+  "displayName": "John Doe",
+  "currentTenantId": "60d5ec49a1b2c3e4f5g6h7i8",
+  "currentTenantName": "Acme Corp",
+  "tenants": [
+    {
+      "id": "60d5ec49a1b2c3e4f5g6h7i8",
+      "name": "Acme Corp",
+      "slug": "acme-corp",
+      "role": "OWNER"
+    }
+  ]
 }
 ```
 
 ---
 
-# User APIs
+# Workspace (Tenant) APIs
 
-## Search Users
+Workspaces allow teams to isolate their conversations and messages. Users must be members of a workspace to access its content.
 
-`GET /api/users/search?query=john`
+## Create Workspace
 
-Search users by username or display name. Scoped to the authenticated tenant only.
+`POST /api/workspaces`
 
-## Get Current Profile
-
-`GET /api/users/profile`
-
-Returns the authenticated user's profile.
-
-## Get User By Username
-
-`GET /api/users/{username}`
-
-Returns profile details for a specific user. Available to all authenticated users in the same tenant.
-
-## Update Profile
-
-`PUT /api/users/profile?displayName=John%20Smith`
-
-Updates the authenticated user's display name.
-
-## Change Password
-
-`POST /api/users/password`
-
-Changes password after validating the current password.
+Creates a new workspace. The authenticated user becomes the `OWNER`.
 
 Request:
 ```json
 {
-  "currentPassword": "old_password",
-  "newPassword": "new_password"
+  "name": "Acme Corp",
+  "slug": "acme-corp",
+  "description": "Primary workspace for Acme"
 }
 ```
 
-## Delete Account
+## List My Workspaces
 
-`DELETE /api/users/me`
+`GET /api/workspaces`
 
-Deletes the authenticated user's account and all associated data.
+Returns all workspaces where the authenticated user is a member.
+
+## Get Workspace Details
+
+`GET /api/workspaces/{tenantId}`
+
+## Update Workspace
+
+`PUT /api/workspaces/{tenantId}`
+
+Only owners can update.
+
+## Delete Workspace
+
+`DELETE /api/workspaces/{tenantId}`
+
+Only owners can delete.
+
+---
+
+# Invite APIs
+
+Invite links allow users to join workspaces.
+
+## Generate Invite Link
+
+`POST /api/invites/generate`
+
+Generates a unique token for a workspace. Only owners/admins can generate.
+
+Request:
+```json
+{
+  "tenantId": "acme-corp",
+  "expiresInDays": "7"
+}
+```
+
+## Accept Invite
+
+`POST /api/invites/accept`
+
+Adds the authenticated user to the workspace associated with the token.
+
+Request:
+```json
+{
+  "token": "uuid-token-here"
+}
+```
 
 ---
 
@@ -278,7 +317,17 @@ The new owner must already be a participant.
 
 Returns all messages for a conversation. Only participants can access.
 
-Messages are returned in ascending order by creation time.
+## Search Messages (In Conversation)
+
+`GET /api/messages/{conversationId}/search?query=hello`
+
+Searches for messages containing the query within a specific conversation.
+
+## Search All My Messages (In Current Workspace)
+
+`GET /api/messages/search?query=urgent`
+
+Searches across all conversations the user is a participant of in the **current workspace** (specified by `X-Tenant-Id`).
 
 ## Get Paginated Messages
 
@@ -456,20 +505,32 @@ Domain-level authorization:
 
 ## users
 
-Stores account and profile data.
+Stores global account and profile data.
 
 Fields:
 * `id` - MongoDB ObjectId
-* `tenantId` - Tenant identifier (scoped index)
-* `username` - Unique per tenant (compound unique index)
-* `displayName` - Search field (compound index)
+* `username` - Unique (global)
+* `displayName` - Search field
 * `password` - Bcrypt hash
 * `externalUserId` - Optional external system ID
 * `createdAt` - Account creation timestamp
 
 Indexes:
-* `{tenantId: 1, username: 1}` - Unique
-* `{tenantId: 1, displayName: 1}` - Search queries
+* `{username: 1}` - Unique
+
+## tenant_members
+
+Maps users to workspaces with roles.
+
+Fields:
+* `id` - MongoDB ObjectId
+* `tenantId` - Workspace identifier
+* `userId` - User identifier
+* `role` - Role (OWNER, ADMIN, MEMBER)
+* `joinedAt` - Timestamp
+
+Indexes:
+* `{tenantId: 1, userId: 1}` - Unique
 
 ## conversations
 
@@ -477,17 +538,16 @@ Stores direct and group metadata.
 
 Fields:
 * `id` - MongoDB ObjectId
-* `tenantId` - Tenant identifier (scoped index)
+* `tenantId` - Workspace identifier (scoped index)
 * `type` - ConversationType enum: DM or GROUP
 * `name` - Group name (null for DMs)
-* `createdBy` - Username of owner
+* `createdBy` - UserID of owner
 * `createdAt` - Creation timestamp
-* `participants` - Set of usernames
+* `participantIds` - Set of userIds
 
 Indexes:
-* `{tenantId: 1, participants: 1}` - Find conversations by participant
+* `{tenantId: 1, participantIds: 1}` - Find conversations by participant
 * `{tenantId: 1, createdAt: -1}` - Time-based queries
-* `{tenantId: 1, type: 1, participants: 1}` - Unique for DMs
 
 ## messages
 
@@ -495,16 +555,16 @@ Stores conversation messages.
 
 Fields:
 * `id` - MongoDB ObjectId
-* `tenantId` - Tenant identifier (scoped index)
+* `tenantId` - Workspace identifier (scoped index)
 * `conversationId` - Reference to conversation
-* `sender` - Username of sender
+* `senderId` - UserID of sender
 * `content` - Message text
 * `replyToId` - Optional message ID this replies to
 * `createdAt` - Message timestamp
 * `updatedAt` - Last edit timestamp (null if never edited)
 * `edited` - Boolean flag
 * `deleted` - Boolean flag (soft delete)
-* `readBy` - Set of usernames who have read this message
+* `readBy` - Set of userIds who have read this message
 
 Indexes:
 * `{tenantId: 1, conversationId: 1, createdAt: -1}` - History queries
@@ -576,10 +636,20 @@ controllers/
   WebhookController.java        - Webhook management
 
 dto/
-  AuthResponse.java             - Login response
+  AuthResponse.java             - Base auth response
+  SaasAuthResponse.java         - Multi-tenant login response
+  TenantInfo.java               - Workspace metadata for responses
   LoginRequest.java             - Login payload
   RegisterRequest.java          - Registration payload
   UserProfileResponse.java      - User profile response
+  WorkspaceRequest.java         - Create/Update workspace payload
+  SendMessageRequest.java       - Send message payload
+  EditMessageRequest.java        - Edit message payload
+  RealtimeMessageRequest.java   - WebSocket message payload
+  GenerateInviteRequest.java    - Invite generation payload
+  AcceptInviteRequest.java      - Invite acceptance payload
+  ChangePasswordRequest.java    - Password change payload
+  RegisterWebhookRequest.java   - Webhook registration payload
 
 entities/
   User.java                     - User domain model

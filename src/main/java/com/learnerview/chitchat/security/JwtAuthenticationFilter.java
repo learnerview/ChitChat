@@ -52,7 +52,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 String username = tokenProvider.getUsernameFromToken(jwt);
                 String tokenTenant = tokenProvider.getTenantIdFromToken(jwt);
 
-                if (tenantId != null && tokenTenant != null && !tenantId.equals(tokenTenant)) {
+                if (shouldEnforceTenantMatch(request)
+                        && tenantId != null
+                        && tokenTenant != null
+                        && !tenantId.equals(tokenTenant)) {
                     throw new IllegalArgumentException("Token tenant does not match request tenant");
                 }
 
@@ -83,7 +86,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     }
 
     private void ensureProvisionedExternalUser(String tenantId, String username, String externalUserId) {
-        if (userRepository.findByTenantIdAndUsername(tenantId, username).isPresent()) {
+        if (userRepository.findByUsername(username).isPresent()) {
             return;
         }
 
@@ -92,7 +95,6 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         }
 
         User user = User.builder()
-                .tenantId(tenantId)
                 .username(username)
                 .displayName(username)
                 .externalUserId(externalUserId)
@@ -108,5 +110,14 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             return bearerToken.substring(7);
         }
         return null;
+    }
+
+    private boolean shouldEnforceTenantMatch(HttpServletRequest request) {
+        String path = request.getRequestURI();
+        // Cross-tenant onboarding endpoints must work before/while switching tenant context.
+        if (path.startsWith("/api/auth") || path.startsWith("/api/workspaces") || path.equals("/api/invites/accept")) {
+            return false;
+        }
+        return true;
     }
 }
