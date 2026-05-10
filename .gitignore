@@ -2,3 +2,7 @@ target/
 logs/
 *.log
 .idea/
+.env
+*.jks
+*.p12
+.DS_Store

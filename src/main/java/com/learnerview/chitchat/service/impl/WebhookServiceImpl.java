@@ -49,11 +49,8 @@ public class WebhookServiceImpl implements WebhookService {
 
     @Override
     public void delete(String id) {
-        WebhookSubscription sub = repository.findById(id)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Webhook subscription not found"));
-        if (!TenantContext.getRequiredTenantId().equals(sub.getTenantId())) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Webhook subscription does not belong to tenant");
-        }
+        WebhookSubscription sub = repository.findByIdAndTenantId(id, TenantContext.getRequiredTenantId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Webhook subscription not found or does not belong to tenant"));
         repository.delete(sub);
     }
 }

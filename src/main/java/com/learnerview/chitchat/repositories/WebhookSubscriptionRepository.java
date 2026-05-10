@@ -11,4 +11,6 @@ public interface WebhookSubscriptionRepository extends MongoRepository<WebhookSu
     List<WebhookSubscription> findByTenantId(String tenantId);
 
     List<WebhookSubscription> findByTenantIdAndActiveTrueAndEventsContaining(String tenantId, String event);
+
+    java.util.Optional<WebhookSubscription> findByIdAndTenantId(String id, String tenantId);
 }

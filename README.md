@@ -1,522 +1,672 @@
 # ChitChat
 
-ChitChat is a headless real-time communication backend designed to be embedded into products that need chat capabilities without building the communication core from scratch.
+ChitChat is a chat backend built with Spring Boot and MongoDB.
 
-This repository represents the current production-oriented implementation state, not a roadmap.
+It handles authentication, conversations, messaging, and real-time communication through REST APIs and WebSocket connections. The service is frontend-independent, so it can be used with web, mobile, or desktop clients.
 
-## 1. Why ChitChat Exists
+## Why ChitChat
 
-Most products that need chat face the same expensive problems:
+Most products that add chat face the same backend problems:
 
-1. Secure identity and session handling.
-2. Reliable conversation and message persistence.
-3. Real-time message fanout to active clients.
-4. Authorization rules around who can read, send, edit, and manage communication.
-5. A consistent backend contract for web, mobile, and partner integrations.
+* Secure identity and session handling
+* Reliable conversation and message persistence
+* Real-time message fanout to active clients
+* Authorization rules around who can read, send, edit, and manage conversations
+* A consistent API contract for multiple client platforms
 
-ChitChat solves these as a focused backend service with REST + WebSocket APIs.
+ChitChat solves these as a focused, multi-tenant communication backend.
 
-## 2. What Problems It Solves
+## Features
 
-ChitChat directly addresses:
+### Authentication
 
-1. Authentication fragmentation.
-	Single JWT auth model for all protected APIs.
-2. Conversation lifecycle complexity.
-	DMs, groups, participant management, and ownership rules.
-3. Message lifecycle requirements.
-	Send, list, paginate, edit, and soft-delete with permission controls.
-4. Real-time delivery.
-	STOMP-based publish-subscribe messaging per conversation.
-5. Integration portability.
-	UI-neutral API surface that works with any frontend stack.
+* JWT-based authentication
+* User registration and login
+* Stateless security configuration
 
-## 3. Current Scope (Present State)
+### User Management
 
-Included in this implementation:
+* Profile fetch and update
+* Password change
+* Account deletion
+* User search
 
-1. JWT registration and login.
-2. User profile read/update, search, account delete, password change.
-3. Conversation management:
-	DM creation, group creation, rename group, add/remove participants, leave group, **transfer ownership**.
-4. Messaging:
-	send, history, pagination, edit, soft-delete, **mark as read**.
-5. WebSocket real-time publish for conversation messages **with strict Tenant enforcement**.
-6. Global API error handling with structured responses.
+### Conversations
 
-Intentionally not included:
+* Direct conversations
+* Group conversations
+* Participant management
+* Group rename
+* Ownership transfer
+* Leave conversation flow
 
-1. File attachments and media pipeline.
-2. Presence and typing indicators.
-3. Notification providers (FCM/APNS/email/SMS).
-4. Multi-tenant partitioning.
-5. Moderation and compliance workflows.
+### Messaging
 
-## 4. Architecture Overview
+* Send messages
+* Paginated history
+* Message replies
+* Edit messages
+* Soft delete messages
+* Read tracking
 
-ChitChat uses a monolithic service architecture with clear layer separation.
+### Real-Time Messaging
 
-### 4.1 Layered Design
+* STOMP over WebSocket
+* SockJS fallback support
+* Conversation-based subscriptions
+* Live message fanout
 
-1. Controllers:
-	HTTP and WebSocket entry points.
-2. Service interfaces:
-	domain contracts.
-3. Service implementations:
-	business logic and authorization checks.
-4. Repositories:
-	Mongo persistence contracts.
-5. Entities:
-	persisted domain model.
-6. Security:
-	JWT parsing, authentication filter, stateless security config.
+---
 
-### 4.2 SOLID Alignment
+# Tech Stack
 
-1. Single Responsibility:
-	Each class focuses on one concern (auth, user, conversation, message, security).
-2. Open/Closed:
-	New behaviors are added by extending services and controllers without rewriting core contracts.
-3. Liskov Substitution:
-	Implementations satisfy their service interface contracts.
-4. Interface Segregation:
-	Service interfaces are domain-specific and focused.
-5. Dependency Inversion:
-	Controllers depend on service abstractions, not concrete implementations.
+* Java 17
+* Spring Boot
+* Spring Security
+* Spring WebSocket
+* MongoDB
+* Maven
+* JWT
+* STOMP
 
-## 5. Core Components and Implementation Methods
+---
 
-### 5.1 Auth Domain
+# Architecture
 
-Controller:
+ChitChat follows a layered monolith structure.
 
-1. POST /api/auth/register
-2. POST /api/auth/login
+## Why Monolith
 
-Key implementation methods:
+A monolithic design keeps authentication, conversations, and messaging tightly coupled with shared data access and consistent tenant isolation. This avoids operational complexity of distributed systems while maintaining clear separation of concerns.
 
-1. UserService.register(user)
-2. AuthenticationManager.authenticate(...)
-3. JwtTokenProvider.generateToken(authentication)
+## Layers
 
-How it works:
+### Controllers
 
-1. Registration validates and stores a bcrypt password hash.
-2. Login authenticates credentials using Spring Security.
-3. JWT is generated and returned as bearer token metadata.
+REST and WebSocket entry points. Request validation and extracting authenticated context.
 
-### 5.2 User Domain
+### Services
 
-Controller endpoints:
+Business logic and authorization rules. Services implement domain-specific contracts and enforce permission checks before data modifications.
 
-1. GET /api/users/search
-2. GET /api/users/profile
-3. GET /api/users/{username}
-4. PUT /api/users/profile
-5. POST /api/users/password
-6. DELETE /api/users/me
+### Repositories
 
-Key implementation methods:
+MongoDB persistence layer. All queries are scoped by `tenantId` to prevent cross-tenant data leaks.
 
-1. UserService.findByUsername(username)
-2. UserService.searchUsers(query)
-3. UserService.updateProfile(username, displayName)
-4. UserService.changePassword(username, currentPassword, newPassword)
-5. UserService.deleteAccount(username)
+### Entities
 
-Real-world value:
+Domain models stored in MongoDB. Each entity includes tenant isolation at the database level.
 
-1. Password rotation without re-registration.
-2. Lightweight searchable identity directory for composing chats.
+### Security
 
-### 5.3 Conversation Domain
+JWT authentication filter validates bearer tokens and tenant claims. Stateless configuration with request-scoped tenant context.
 
-Controller endpoints:
+---
 
-1. POST /api/conversations/dm?with={username}
-2. POST /api/conversations/group?name={groupName}
-3. GET /api/conversations
-4. GET /api/conversations/{id}
-5. PATCH /api/conversations/{id}/name?name={newName}
-6. POST /api/conversations/{id}/participants?username={username}
-7. DELETE /api/conversations/{id}/participants/{username}
-8. POST /api/conversations/{id}/leave
-9. POST /api/conversations/{id}/transfer?to={newOwner}
+# Authentication APIs
 
-Key implementation methods:
+## Register
 
-1. ConversationService.createDirectConversation(currentUser, otherUser)
-2. ConversationService.createGroupConversation(currentUser, name, members)
-3. ConversationService.renameConversation(conversationId, username, newName)
-4. ConversationService.addParticipant(conversationId, requester, participant)
-5. ConversationService.removeParticipant(conversationId, requester, participant)
-6. ConversationService.leaveConversation(conversationId, username)
-7. ConversationService.transferOwnership(conversationId, username, newOwner)
+`POST /api/auth/register`
 
-Important business rules:
+Creates a new user account. Password is hashed with bcrypt before storage.
 
-1. Direct conversation with self is blocked.
-2. DM is reused if it already exists between two users.
-3. Group owner controls rename and membership changes.
-4. Owner cannot be removed or leave without ownership transfer.
+Request:
+```json
+{
+  "username": "john",
+  "displayName": "John Doe",
+  "password": "secure_password"
+}
+```
 
-### 5.4 Message Domain
+## Login
 
-Controller endpoints:
+`POST /api/auth/login`
 
-1. GET /api/messages/{conversationId}
-2. GET /api/messages/{conversationId}/paginated?page=0&size=25
-3. POST /api/messages/{conversationId}
-4. PATCH /api/messages/{messageId}
-5. DELETE /api/messages/{messageId}
-6. POST /api/messages/{conversationId}/read
+Authenticates the user and returns a JWT token that includes both username and tenant ID.
 
-Key implementation methods:
+Request:
+```json
+{
+  "username": "john",
+  "password": "secure_password"
+}
+```
 
-1. MessageService.sendMessage(conversationId, sender, content, replyToId)
-2. MessageService.getMessageHistory(conversationId, viewer)
-3. MessageService.getMessageHistoryPaginated(...)
-4. MessageService.editMessage(messageId, editor, updatedContent)
-5. MessageService.deleteMessage(messageId, requester)
-6. MessageService.markAsRead(conversationId, username)
+Response:
+```json
+{
+  "token": "eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9...",
+  "username": "john",
+  "displayName": "John Doe"
+}
+```
 
-Important business rules:
+---
 
-1. Only participants can read or send in a conversation.
-2. Reply target must exist and belong to same conversation.
-3. Only sender can edit a message.
-4. Sender or conversation owner can soft-delete a message.
-5. Read receipts are tracked securely per user.
+# User APIs
 
-## 6. Real-Time Messaging (WebSocket)
+## Search Users
 
-Protocol:
+`GET /api/users/search?query=john`
 
-1. STOMP over WebSocket with SockJS fallback.
+Search users by username or display name. Scoped to the authenticated tenant only.
 
-Endpoints:
+## Get Current Profile
 
-1. Handshake endpoint: /ws
-2. App destination: /app/conversations/{conversationId}/send
-3. Topic destination: /topic/conversations/{conversationId}
+`GET /api/users/profile`
 
-Flow with strict tenant enforcement:
+Returns the authenticated user's profile.
 
-1. Client connects via STOMP, passing `X-Tenant-Id` in headers.
-2. `WebSocketTenantHandshakeInterceptor` validates tenant payload at connection.
-3. Client sends message payload to app destination.
-4. `RealtimeMessageController` binds authenticated context and native STOMP headers.
-5. MessageService persists the message.
-6. SimpMessagingTemplate broadcasts saved message to conversation topic.
+## Get User By Username
 
-## 7. Data Model
+`GET /api/users/{username}`
 
-MongoDB collections:
+Returns profile details for a specific user. Available to all authenticated users in the same tenant.
 
-1. users
-2. conversations
-3. messages
+## Update Profile
 
-### 7.1 User
+`PUT /api/users/profile?displayName=John%20Smith`
 
-Primary fields:
+Updates the authenticated user's display name.
 
-1. id
-2. username
-3. displayName
-4. password (bcrypt hash)
-5. createdAt
+## Change Password
 
-### 7.2 Conversation
+`POST /api/users/password`
 
-Primary fields:
+Changes password after validating the current password.
 
-1. id
-2. type (DM, GROUP)
-3. name
-4. createdBy
-5. createdAt
-6. participants (set of usernames)
+Request:
+```json
+{
+  "currentPassword": "old_password",
+  "newPassword": "new_password"
+}
+```
 
-### 7.3 Message
+## Delete Account
 
-Primary fields:
+`DELETE /api/users/me`
 
-1. id
-2. conversationId
-3. sender
-4. content
-5. replyToId
-6. createdAt
-7. edited
-8. deleted
-9. updatedAt
+Deletes the authenticated user's account and all associated data.
 
-## 8. Security Model
+---
 
-Authentication:
+# Conversation APIs
 
-1. JWT bearer token validation in JwtAuthenticationFilter.
-2. Stateless session policy.
+## Create Direct Conversation
 
-Authorization:
+`POST /api/conversations/dm?with=jane`
 
-1. /api/auth/** and /ws/** are public entry points.
-2. All other APIs require authenticated identity.
-3. Domain-level checks enforce participant and owner rules.
+Creates a direct conversation between two users.
 
-Bearer header format:
+If a DM already exists between them, the existing conversation is returned.
+
+Business rules:
+* Users cannot create DMs with themselves
+* DMs reuse existing conversations if already present
+
+## Create Group Conversation
+
+`POST /api/conversations/group?name=Project%20Team`
+
+Creates a group conversation. The authenticated user becomes the owner.
+
+Request body (optional):
+```json
+["user1", "user2", "user3"]
+```
+
+## Get User Conversations
+
+`GET /api/conversations`
+
+Returns all conversations for the authenticated user (both DMs and groups).
+
+## Get Conversation By ID
+
+`GET /api/conversations/{id}`
+
+Returns conversation details. Only participants can access.
+
+## Rename Group
+
+`PATCH /api/conversations/{id}/name?name=New%20Group%20Name`
+
+Only the group owner can rename the group.
+
+## Add Participant
+
+`POST /api/conversations/{id}/participants?username=newuser`
+
+Adds a participant to a group. Only the group owner can add members.
+
+## Remove Participant
+
+`DELETE /api/conversations/{id}/participants/{username}`
+
+Removes a participant from a group. Only the group owner can remove members.
+
+The owner cannot remove themselves; ownership must be transferred first.
+
+## Leave Conversation
+
+`POST /api/conversations/{id}/leave`
+
+Allows a participant to leave a conversation.
+
+Business rules:
+* Group owners must transfer ownership before leaving
+* Leaving a DM is allowed for any participant
+
+## Transfer Ownership
+
+`POST /api/conversations/{id}/transfer?to=newowner`
+
+Transfers group ownership to another participant. Only the current owner can transfer.
+
+The new owner must already be a participant.
+
+---
+
+# Message APIs
+
+## Get Message History
+
+`GET /api/messages/{conversationId}`
+
+Returns all messages for a conversation. Only participants can access.
+
+Messages are returned in ascending order by creation time.
+
+## Get Paginated Messages
+
+`GET /api/messages/{conversationId}/paginated?page=0&size=25`
+
+Returns paginated messages for a conversation. Only participants can access.
+
+Response:
+```json
+{
+  "content": [...],
+  "page": 0,
+  "size": 25,
+  "totalElements": 250,
+  "totalPages": 10,
+  "last": false
+}
+```
+
+## Send Message
+
+`POST /api/messages/{conversationId}`
+
+Creates a new message in the conversation. Only participants can send.
+
+Request:
+```json
+{
+  "content": "Hello everyone",
+  "replyToId": "optional-message-id"
+}
+```
+
+Business rules:
+* Only conversation participants can send messages
+* Reply targets must belong to the same conversation
+* Empty messages are rejected
+
+## Edit Message
+
+`PATCH /api/messages/{messageId}`
+
+Updates message content. Only the original sender can edit.
+
+Request:
+```json
+{
+  "content": "Updated message"
+}
+```
+
+Business rules:
+* Only the sender can edit their own messages
+* Deleted messages cannot be edited
+* Edited flag is set on the message
+
+## Delete Message
+
+`DELETE /api/messages/{messageId}`
+
+Soft-deletes a message. The original sender or conversation owner can perform this.
+
+Business rules:
+* Messages are marked as deleted, not removed from the database
+* Message content is replaced with "This message was deleted"
+* Reply chains preserve message history
+
+## Mark Messages As Read
+
+`POST /api/messages/{conversationId}/read`
+
+Marks all unread messages in a conversation as read for the authenticated user.
+
+---
+
+# WebSocket
+
+Real-time messaging uses STOMP over WebSocket with SockJS fallback.
+
+## Connection Endpoint
+
+`/ws`
+
+Requires `X-Tenant-Id` header and JWT bearer token in the initial handshake.
+
+## Publish Destination
+
+`/app/conversations/{conversationId}/send`
+
+Send message requests to this destination. Messages are persisted and broadcast to all subscribers.
+
+## Subscribe Destination
+
+`/topic/conversations/{conversationId}`
+
+Subscribe to this topic to receive real-time messages for a conversation.
+
+Only participants of the conversation can subscribe.
+
+## Flow
+
+1. Client connects to `/ws` with `X-Tenant-Id` header and JWT token
+2. Connection is rejected if tenant header is missing
+3. Client subscribes to `/topic/conversations/{conversationId}`
+4. Subscription is rejected if client is not a participant
+5. Client sends message to `/app/conversations/{conversationId}/send`
+6. MessageService persists the message
+7. Message is broadcast to all subscribers of that conversation topic
+
+## Security
+
+WebSocket security is multi-layered:
+
+* Tenant header validation at connection time (rejected if missing)
+* JWT bearer token validation (same as REST)
+* Subscription authorization checks (conversation membership required)
+* Tenant claim validation in JWT (token tenant must match request tenant)
+
+---
+
+# Multi-Tenancy
+
+ChitChat is designed as a shared, multi-tenant backend. All requests must include the tenant ID header:
+
+```http
+X-Tenant-Id: acme-corp
+```
+
+Tenant isolation is enforced at multiple layers:
+
+* Request filter validates tenant header presence
+* JWT token includes tenant claim
+* All queries include tenantId in filters
+* Repositories implement compound indexes on tenantId + business key
+
+This allows one ChitChat instance to serve multiple independent organizations (tenants) without data leaks.
+
+---
+
+# Security
+
+## Authentication
+
+Protected APIs require JWT bearer token:
 
 ```http
 Authorization: Bearer <jwt-token>
 ```
 
-## 9. Error Handling Contract
+Tokens are signed with HMAC-SHA512 using the JWT_SECRET. Tokens include username and tenantId claims.
 
-GlobalExceptionHandler provides consistent response shape:
+## Authorization
 
-1. timestamp
-2. status
-3. error
-4. message
+* `/api/auth/**` - Public (registration and login)
+* `/ws/**` - Public for connection, but tenant header required at handshake
+* All other `/api/**` - Requires valid JWT
 
-Handled classes include:
+Domain-level authorization:
 
-1. ResponseStatusException
-2. MethodArgumentNotValidException
-3. ConstraintViolationException
-4. Generic Exception fallback
+* Only conversation participants can send messages or view history
+* Only group owners can rename groups or manage participants
+* Only message senders can edit their own messages
+* Only message senders or conversation owners can delete messages
 
-## 10. API Integration Guidelines
+## Tenant Validation
 
-Required request headers for all API calls:
+* Request tenant header is validated and stored in request-scoped ThreadLocal
+* JWT token tenant claim is compared with request tenant header
+* Mismatch results in 401 Unauthorized
+* All repository queries are scoped by tenant, preventing cross-tenant data access
 
-1. Authorization: Bearer <token>
-2. X-Tenant-Id: <tenant-id>
+---
 
-### 10.1 Recommended Client Integration Order
+# Database Collections
 
-1. Register user.
-2. Login and store token securely.
-3. Load user profile.
-4. Discover users via search.
-5. Create or open DM/group.
-6. Fetch initial history with paginated API.
-7. Connect WebSocket and subscribe to conversation topic.
-8. Send via REST or WebSocket app destination.
+## users
 
-### 10.2 Token Handling Guidelines
+Stores account and profile data.
 
-1. Keep access token in secure storage.
-2. Send Authorization header on every protected REST call.
-3. Reconnect WebSocket after auth refresh events in client.
+Fields:
+* `id` - MongoDB ObjectId
+* `tenantId` - Tenant identifier (scoped index)
+* `username` - Unique per tenant (compound unique index)
+* `displayName` - Search field (compound index)
+* `password` - Bcrypt hash
+* `externalUserId` - Optional external system ID
+* `createdAt` - Account creation timestamp
 
-### 10.3 Pagination Guidelines
+Indexes:
+* `{tenantId: 1, username: 1}` - Unique
+* `{tenantId: 1, displayName: 1}` - Search queries
 
-1. Use newest-first pagination endpoint for long conversations.
-2. Keep page size in 20-50 range for responsive UX.
-3. Merge incoming real-time messages into cached page state.
+## conversations
 
-### 10.4 Conversation Ownership Guidelines
+Stores direct and group metadata.
 
-1. Show owner-only controls in UI for rename/member operations.
-2. Prevent owner self-leave in UI and explain transfer requirement.
+Fields:
+* `id` - MongoDB ObjectId
+* `tenantId` - Tenant identifier (scoped index)
+* `type` - ConversationType enum: DM or GROUP
+* `name` - Group name (null for DMs)
+* `createdBy` - Username of owner
+* `createdAt` - Creation timestamp
+* `participants` - Set of usernames
 
-### 10.5 Message Editing and Deletion Guidelines
+Indexes:
+* `{tenantId: 1, participants: 1}` - Find conversations by participant
+* `{tenantId: 1, createdAt: -1}` - Time-based queries
+* `{tenantId: 1, type: 1, participants: 1}` - Unique for DMs
 
-1. Expose edit action only for sender-authored messages.
-2. Expose delete action for sender and group owner.
-3. Render deleted messages as placeholders to preserve thread continuity.
+## messages
 
-## 11. Real-World Use Cases
+Stores conversation messages.
 
-### Use Case 1: Team Collaboration Chat
+Fields:
+* `id` - MongoDB ObjectId
+* `tenantId` - Tenant identifier (scoped index)
+* `conversationId` - Reference to conversation
+* `sender` - Username of sender
+* `content` - Message text
+* `replyToId` - Optional message ID this replies to
+* `createdAt` - Message timestamp
+* `updatedAt` - Last edit timestamp (null if never edited)
+* `edited` - Boolean flag
+* `deleted` - Boolean flag (soft delete)
+* `readBy` - Set of usernames who have read this message
 
-Problem:
-Teams need project channels and private collaboration without building a custom chat backend.
+Indexes:
+* `{tenantId: 1, conversationId: 1, createdAt: -1}` - History queries
 
-How ChitChat solves it:
+---
 
-1. Create groups per project.
-2. Add/remove participants as teams change.
-3. Use real-time topic subscriptions for active room updates.
-4. Keep history and moderation-ready metadata (edited/deleted flags).
+# Business Rules
 
-### Use Case 2: Marketplace Buyer-Seller Messaging
+## Conversations
 
-Problem:
-Users need reliable direct conversations with minimal backend complexity.
+* Users cannot create DMs with themselves
+* Existing DMs are reused (no duplicate DM pairs)
+* Only group owners can rename groups
+* Only group owners can add or remove participants
+* Owners cannot be removed (must transfer ownership first)
+* Owners cannot leave without transferring ownership
 
-How ChitChat solves it:
+## Messages
 
-1. Open deterministic DMs between buyer and seller.
-2. Persist conversation and message records in Mongo.
-3. Deliver live messages through topic subscription.
+* Only conversation participants can send messages
+* Empty messages are rejected
+* Reply targets must belong to the same conversation
+* Only senders can edit their own messages
+* Deleted messages cannot be edited
+* Messages are soft-deleted, never removed from database
+* Message content is replaced with "This message was deleted" when soft-deleted
+* Read tracking is per user, per message
 
-### Use Case 3: In-App Support Channel
+---
 
-Problem:
-Product support teams require controlled group spaces with message governance.
+# Error Responses
 
-How ChitChat solves it:
-
-1. Support lead is group owner.
-2. Owner controls participant access.
-3. Support staff can manage message lifecycle with edit/delete rules.
-
-## 12. Build and Run
-
-Prerequisites:
-
-1. Java 17+
-2. MongoDB 4.4+
-3. Maven 3.6+
-
-Run locally:
-
-```bash
-mvn spring-boot:run
-```
-
-Compile check:
-
-```bash
-mvn -DskipTests compile
-```
-
-Default properties:
-
-1. Mongo URI: mongodb://localhost:27017/chitchat
-2. Port: 8080
-3. JWT expiration: 86400000 ms
-
-## 13. Key Project Structure
-
-```text
-src/main/java/com/learnerview/chitchat/
-  ChitChatApplication.java
-  config/
-	 SecurityConfig.java
-	 WebSocketConfig.java
-  controllers/
-	 AuthController.java
-	 ConversationController.java
-	 MessageController.java
-	 RealtimeMessageController.java
-	 UserController.java
-  dto/
-	 AuthResponse.java
-	 LoginRequest.java
-	 RegisterRequest.java
-	 UserProfileResponse.java
-  entities/
-	 Conversation.java
-	 ConversationType.java
-	 Message.java
-	 User.java
-  exception/
-	 GlobalExceptionHandler.java
-  repositories/
-	 ConversationRepository.java
-	 MessageRepository.java
-	 UserRepository.java
-  security/
-	 JwtAuthenticationFilter.java
-	 JwtTokenProvider.java
-  service/
-	 ConversationService.java
-	 MessageService.java
-	 UserService.java
-  service/impl/
-	 ConversationServiceImpl.java
-	 MessageServiceImpl.java
-	 MongoUserDetailsService.java
-	 UserServiceImpl.java
-```
-
-## 14. Integration Checklist
-
-Before production integration, verify:
-
-1. JWT secret is rotated to a long random value.
-2. CORS and origin policies are set for your client domains.
-3. MongoDB backup policy exists.
-4. API gateway timeout/retry strategy is configured.
-5. WebSocket reconnect strategy is implemented in clients.
-6. Monitoring and alerting are attached to authentication and message endpoints.
-
-## 16. Integration Modes
-
-ChitChat supports three integration modes.
-
-### 16.1 Standalone Mode
-
-1. Uses built-in registration and login.
-2. Internal JWT is issued by ChitChat.
-3. Best for independent products with direct user management.
-
-### 16.2 Integrated Mode
-
-1. Accepts external JWT tokens.
-2. Treats ChitChat as an identity consumer, not only identity owner.
-3. Can auto-provision users on first valid external identity request.
-4. Supports exchanging authenticated external context into internal ChitChat token via /api/auth/exchange.
-
-### 16.3 Event-Driven Mode
-
-1. Emits webhook events to tenant-registered endpoints.
-2. Current high-value events:
-	 message.sent
-	 message.deleted
-	 conversation.created
-3. Delivery payload shape:
+All APIs return consistent error structure:
 
 ```json
 {
-	"tenantId": "acme",
-	"event": "message.sent",
-	"timestamp": "2026-03-28T10:15:30",
-	"data": {
-		"messageId": "...",
-		"conversationId": "..."
-	}
+  "timestamp": "2026-05-10T10:30:00",
+  "status": 400,
+  "error": "Bad Request",
+  "message": "Invalid request parameters"
 }
 ```
 
-Webhook management endpoints:
+Common HTTP status codes:
 
-1. POST /api/integrations/webhooks
-2. GET /api/integrations/webhooks
-3. DELETE /api/integrations/webhooks/{id}
+* `400` - Bad Request (validation, missing tenant header, invalid input)
+* `401` - Unauthorized (invalid token, token tenant mismatch)
+* `403` - Forbidden (not authorized for this resource)
+* `404` - Not Found (resource does not exist or not accessible to this tenant)
+* `500` - Internal Server Error (unexpected server error)
 
-Webhook security header:
+---
 
-1. X-Signature: HMAC_SHA256(payload, secret)
-
-## 17. Architecture Diagrams
-
-### 17.1 Message Flow
+# Project Structure
 
 ```text
-Client
-	-> REST / WebSocket
-	-> Controller
-	-> Service
-	-> MongoDB
-	-> WebSocket Topic Fanout
-	-> Webhook Event Delivery
+src/main/java/com/learnerview/chitchat/
+
+config/
+  SecurityConfig.java           - Spring Security configuration
+  WebSocketConfig.java          - STOMP and WebSocket setup
+
+controllers/
+  AuthController.java           - Registration and login
+  UserController.java           - User management APIs
+  ConversationController.java   - Conversation APIs
+  MessageController.java        - Message REST APIs
+  RealtimeMessageController.java - WebSocket message handler
+  WebhookController.java        - Webhook management
+
+dto/
+  AuthResponse.java             - Login response
+  LoginRequest.java             - Login payload
+  RegisterRequest.java          - Registration payload
+  UserProfileResponse.java      - User profile response
+
+entities/
+  User.java                     - User domain model
+  Conversation.java             - Conversation domain model
+  ConversationType.java         - Enum: DM, GROUP
+  Message.java                  - Message domain model
+  WebhookSubscription.java      - Webhook subscription
+
+exception/
+  GlobalExceptionHandler.java   - Centralized error handling
+
+repositories/
+  UserRepository.java           - MongoDB user queries
+  ConversationRepository.java   - MongoDB conversation queries
+  MessageRepository.java        - MongoDB message queries
+  WebhookSubscriptionRepository.java - Webhook subscriptions
+
+security/
+  JwtTokenProvider.java         - JWT generation and validation
+  JwtAuthenticationFilter.java  - JWT extraction and context setup
+  WebSocketSubscriptionInterceptor.java - WebSocket authorization
+
+service/
+  UserService.java              - User domain contract
+  ConversationService.java      - Conversation domain contract
+  MessageService.java           - Message domain contract
+  WebhookService.java           - Webhook domain contract
+  EventPublisherService.java    - Webhook event publishing
+
+service/impl/
+  UserServiceImpl.java           - User business logic
+  ConversationServiceImpl.java   - Conversation business logic
+  MessageServiceImpl.java        - Message business logic
+  WebhookServiceImpl.java        - Webhook business logic
+  WebhookEventPublisherServiceImpl.java - Event publishing
+  MongoUserDetailsService.java  - Spring Security user loading
+
+tenant/
+  TenantContext.java            - Request-scoped tenant storage
+  TenantHeaderFilter.java       - Tenant header extraction
+  WebSocketTenantHandshakeInterceptor.java - WebSocket tenant setup
 ```
 
-### 17.2 External Auth Flow
+---
 
-```text
-Client (External JWT)
-	-> JwtAuthenticationFilter
-	-> External Claim Parse/Validate
-	-> Tenant-Aware User Resolve (or Auto-Provision)
-	-> Service Access
+# Webhook Events
+
+Webhooks allow external systems to listen for events in ChitChat.
+
+Supported events:
+
+* `message.sent` - New message created
+* `message.deleted` - Message soft-deleted
+* `conversation.created` - New conversation created
+
+## Event Payload
+
+```json
+{
+  "tenantId": "acme-corp",
+  "event": "message.sent",
+  "timestamp": "2026-03-28T10:15:30",
+  "data": {
+    "messageId": "60d5ec49a1b2c3e4f5g6h7i8",
+    "conversationId": "60d5ec49a1b2c3e4f5g6h7i9",
+    "sender": "john",
+    "content": "Hello everyone"
+  }
+}
 ```
 
-## 18. License
+## Webhook Security
 
-MIT. See [LICENSE](LICENSE).
+Webhooks are signed with HMAC-SHA256:
+
+```http
+X-Signature: HMAC_SHA256(payload, secret)
+```
+
+Recipients should verify the signature using their registered secret before processing the event.
+
+## Delivery
+
+Webhooks are delivered asynchronously via HTTP POST to registered endpoints. Delivery failures are logged but do not block message persistence.
+
+---
+
+# License
+
+MIT

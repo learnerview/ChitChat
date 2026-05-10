@@ -17,9 +17,10 @@ public class WebSocketTenantHandshakeInterceptor implements HandshakeInterceptor
                                    WebSocketHandler wsHandler,
                                    Map<String, Object> attributes) {
         String tenantId = request.getHeaders().getFirst(TenantHeaderFilter.TENANT_HEADER);
-        if (tenantId != null && !tenantId.isBlank()) {
-            attributes.put("tenantId", tenantId.trim());
+        if (tenantId == null || tenantId.isBlank()) {
+            return false;
         }
+        attributes.put("tenantId", tenantId.trim());
         return true;
     }
 
