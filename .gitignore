@@ -1,8 +1,54 @@
+# Maven
 target/
+!.mvn/wrapper/maven-wrapper.jar
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+
+# Compiled / packaged
+*.class
+*.jar
+*.war
+*.ear
+*.nar
+
+# IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# Eclipse
+.classpath
+.project
+.settings/
+bin/
+
+# VS Code
+.vscode/
+
+# Logs
 logs/
 *.log
-.idea/
+
+# Environment / secrets
 .env
+.env.*
+!.env.example
 *.jks
 *.p12
+*.pem
+*.keystore
+
+# Spring Boot
+*.pid
+
+# OS
 .DS_Store
+Thumbs.db
