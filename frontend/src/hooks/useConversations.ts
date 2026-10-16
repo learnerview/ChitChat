@@ -9,7 +9,7 @@ export type ConversationEventHandler = (conversationId: string, event: RealtimeE
  * Owns the conversation list: loading, realtime watch registration,
  * unread counters, last-message previews, and membership-refresh events.
  */
-export function useConversations() {
+export function useConversations(myUserId: string) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [lastMessages, setLastMessages] = useState<Record<string, ChatMessage>>({});
 
@@ -103,9 +103,11 @@ export function useConversations() {
                   ...c,
                   lastMessageSequence: message.sequence,
                   lastMessageAt: message.createdAt,
-                  unreadCount: isActive
+                  // Increment only for messages sent by someone else; the current
+                  // user's own messages never count as unread for themselves.
+                  unreadCount: isActive || message.senderId === myUserId
                     ? 0
-                    : Math.max(c.unreadCount, message.sequence - (c.lastReadSequence ?? 0)),
+                    : c.unreadCount + 1,
                 }
               : c,
           ),
@@ -115,6 +117,22 @@ export function useConversations() {
         setLastMessages(prev =>
           prev[conversationId]?.id === edited.id ? { ...prev, [conversationId]: edited } : prev,
         );
+      } else if (event.type === 'MESSAGE_DELETED') {
+        const deletedId = (event.payload as ChatMessage).id;
+        setLastMessages(prev => {
+          const current = prev[conversationId];
+          if (current?.id === deletedId) {
+            // The deleted message was the sidebar preview. Refresh the
+            // conversation list so the server supplies the latest remaining
+            // non-deleted message as the new preview (see MessageServiceImpl
+            // which recalculates lastMessageAt on deletion).
+            reload();
+            const next = { ...prev };
+            delete next[conversationId];
+            return next;
+          }
+          return prev;
+        });
       } else if (
         event.type === 'MEMBER_ADDED' ||
         event.type === 'MEMBER_REMOVED' ||

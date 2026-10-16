@@ -2,6 +2,7 @@ package com.learnerview.chitchat.realtime;
 
 import com.learnerview.chitchat.common.security.JwtHandshakeHandler;
 import com.learnerview.chitchat.common.tenancy.WebSocketTenantHandshakeInterceptor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -20,19 +21,18 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     private final WebSocketTenantHandshakeInterceptor tenantHandshakeInterceptor;
     private final ConnectionLimitHandshakeInterceptor connectionLimitHandshakeInterceptor;
     private final JwtHandshakeHandler jwtHandshakeHandler;
-    private final WebSocketSubscriptionInterceptor subscriptionInterceptor;
+    @Autowired
+    private WebSocketSubscriptionInterceptor subscriptionInterceptor;
 
     @Value("${app.cors.allowed-origins:*}")
     private String[] allowedOrigins;
 
     public WebSocketConfig(WebSocketTenantHandshakeInterceptor tenantHandshakeInterceptor,
                            ConnectionLimitHandshakeInterceptor connectionLimitHandshakeInterceptor,
-                           JwtHandshakeHandler jwtHandshakeHandler,
-                           WebSocketSubscriptionInterceptor subscriptionInterceptor) {
+                           JwtHandshakeHandler jwtHandshakeHandler) {
         this.tenantHandshakeInterceptor = tenantHandshakeInterceptor;
         this.connectionLimitHandshakeInterceptor = connectionLimitHandshakeInterceptor;
         this.jwtHandshakeHandler = jwtHandshakeHandler;
-        this.subscriptionInterceptor = subscriptionInterceptor;
     }
 
     @Override

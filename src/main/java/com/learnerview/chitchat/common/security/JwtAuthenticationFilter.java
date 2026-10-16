@@ -122,7 +122,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private User ensureProvisionedExternalUser(String tenantId, String username, String externalUserId) {
         User existing = userRepository.findByUsername(username).orElse(null);
         if (existing != null) {
-            return existing;
+            // Only map when the external subject matches the stored identity.
+            if (externalUserId != null && externalUserId.equals(existing.getExternalUserId())) {
+                return existing;
+            }
+            return null;
         }
         if (!autoProvisionUser) {
             return null;

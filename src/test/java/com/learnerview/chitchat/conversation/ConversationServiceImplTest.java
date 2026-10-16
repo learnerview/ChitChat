@@ -4,6 +4,7 @@ import com.learnerview.chitchat.authorization.AuthorizationService;
 import com.learnerview.chitchat.common.event.EventPublisherService;
 import com.learnerview.chitchat.common.error.ApiException;
 import com.learnerview.chitchat.common.error.ErrorCode;
+import com.learnerview.chitchat.message.MessageRepository;
 import com.learnerview.chitchat.realtime.RealtimeEvent;
 import com.learnerview.chitchat.realtime.RealtimeEventPublisher;
 import com.learnerview.chitchat.realtime.RealtimeEventType;
@@ -53,6 +54,9 @@ class ConversationServiceImplTest {
 
     @Mock
     private TenantMemberRepository tenantMemberRepository;
+
+    @Mock
+    private MessageRepository messageRepository;
 
     @Mock
     private AuthorizationService authorizationService;

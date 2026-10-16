@@ -2,11 +2,15 @@ package com.learnerview.chitchat.tenant;
 
 import com.learnerview.chitchat.common.error.ApiException;
 import com.learnerview.chitchat.common.error.ErrorCode;
+import com.mongodb.client.result.UpdateResult;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 
 @Service
@@ -15,13 +19,16 @@ public class InviteLinkServiceImpl implements InviteLinkService {
     private final InviteLinkRepository inviteLinkRepository;
     private final MembershipService membershipService;
     private final TenantRepository tenantRepository;
+    private final MongoTemplate mongoTemplate;
 
     public InviteLinkServiceImpl(InviteLinkRepository inviteLinkRepository,
                                  MembershipService membershipService,
-                                 TenantRepository tenantRepository) {
+                                 TenantRepository tenantRepository,
+                                 MongoTemplate mongoTemplate) {
         this.inviteLinkRepository = inviteLinkRepository;
         this.membershipService = membershipService;
         this.tenantRepository = tenantRepository;
+        this.mongoTemplate = mongoTemplate;
     }
 
     @Override
@@ -51,7 +58,24 @@ public class InviteLinkServiceImpl implements InviteLinkService {
                 .orElseThrow(() -> new ApiException(ErrorCode.TENANT_ACCESS_DENIED,
                         "This workspace is no longer active"));
 
-        membershipService.addMember(invite.getTenantId(), userId, TenantMember.Role.MEMBER.name());
+        UpdateResult claim = mongoTemplate.updateFirst(
+                Query.query(Criteria.where("token").is(token).and("used").ne(true)),
+                new Update().set("used", true).set("usedAt", LocalDateTime.now()),
+                InviteLink.class);
+        if (claim.getModifiedCount() == 0) {
+            throw new ApiException(ErrorCode.NOT_FOUND, "Invite link not found");
+        }
+
+        try {
+            membershipService.addMember(invite.getTenantId(), userId, TenantMember.Role.MEMBER.name());
+        } catch (RuntimeException ex) {
+            mongoTemplate.updateFirst(
+                    Query.query(Criteria.where("token").is(token).and("used").is(true)),
+                    new Update().set("used", false).unset("usedAt"),
+                    InviteLink.class);
+            throw ex;
+        }
+
         inviteLinkRepository.delete(invite);
         return invite.getTenantId();
     }

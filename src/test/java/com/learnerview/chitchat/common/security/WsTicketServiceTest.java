@@ -10,7 +10,7 @@ class WsTicketServiceTest {
 
     @Test
     void issuedTicketResolvesUserAndTenantOnce() {
-        String ticket = ticketService.issue("user-1", "tenant-1");
+        String ticket = ticketService.issue("user-1", "tenant-1", null);
 
         var consumed = ticketService.consume(ticket);
 
@@ -21,7 +21,7 @@ class WsTicketServiceTest {
 
     @Test
     void ticketsAreSingleUse() {
-        String ticket = ticketService.issue("user-1", "tenant-1");
+        String ticket = ticketService.issue("user-1", "tenant-1", null);
         ticketService.consume(ticket);
 
         assertThat(ticketService.consume(ticket)).isEmpty();
@@ -37,7 +37,7 @@ class WsTicketServiceTest {
     @Test
     void expiredTicketsAreRejected() {
         WsTicketService shortLived = new WsTicketService(-1);
-        String ticket = shortLived.issue("user-1", "tenant-1");
+        String ticket = shortLived.issue("user-1", "tenant-1", null);
 
         assertThat(shortLived.consume(ticket)).isEmpty();
     }

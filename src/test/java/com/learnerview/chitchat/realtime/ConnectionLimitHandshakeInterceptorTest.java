@@ -2,6 +2,7 @@ package com.learnerview.chitchat.realtime;
 
 import com.learnerview.chitchat.common.security.JwtTokenProvider;
 import com.learnerview.chitchat.common.security.WsTicketService;
+import com.learnerview.chitchat.user.UserRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -28,13 +29,16 @@ class ConnectionLimitHandshakeInterceptorTest {
     @Mock
     private com.learnerview.chitchat.common.security.WsTicketService ticketService;
 
+    @Mock
+    private UserRepository userRepository;
+
     private final RealtimeConnectionRegistry registry = new RealtimeConnectionRegistry(5);
 
     private ConnectionLimitHandshakeInterceptor interceptor;
 
     private ConnectionLimitHandshakeInterceptor interceptor() {
         if (interceptor == null) {
-            interceptor = new ConnectionLimitHandshakeInterceptor(tokenProvider, ticketService, registry);
+            interceptor = new ConnectionLimitHandshakeInterceptor(tokenProvider, ticketService, registry, userRepository);
         }
         return interceptor;
     }
@@ -64,6 +68,8 @@ class ConnectionLimitHandshakeInterceptorTest {
     void allowsValidTokensUnderTheConnectionLimit() {
         when(tokenProvider.validateToken("good")).thenReturn(true);
         when(tokenProvider.getUserIdFromToken("good")).thenReturn("user-1");
+        when(userRepository.findById("user-1"))
+                .thenReturn(Optional.of(new com.learnerview.chitchat.user.User()));
         ServletServerHttpResponse response = response();
 
         boolean allowed = interceptor().beforeHandshake(request("good"), response, null, new HashMap<>());
@@ -75,6 +81,8 @@ class ConnectionLimitHandshakeInterceptorTest {
     void rejectsUsersAtTheConnectionLimit() {
         when(tokenProvider.validateToken("good")).thenReturn(true);
         when(tokenProvider.getUserIdFromToken("good")).thenReturn("user-1");
+        when(userRepository.findById("user-1"))
+                .thenReturn(Optional.of(new com.learnerview.chitchat.user.User()));
         for (int i = 0; i < 5; i++) {
             registry.onConnected(connectedEvent("session-" + i, "user-1"));
         }
@@ -89,7 +97,9 @@ class ConnectionLimitHandshakeInterceptorTest {
     @Test
     void acceptsAValidSingleUseTicket() {
         when(ticketService.consume("t-1"))
-                .thenReturn(Optional.of(new WsTicketService.WsTicket("user-1", "tenant-1")));
+                .thenReturn(Optional.of(new WsTicketService.WsTicket("user-1", "tenant-1", null)));
+        when(userRepository.findById("user-1"))
+                .thenReturn(Optional.of(new com.learnerview.chitchat.user.User()));
         MockHttpServletRequest servletRequest = new MockHttpServletRequest("GET", "/ws");
         servletRequest.setParameter("ticket", "t-1");
         Map<String, Object> attributes = new HashMap<>();

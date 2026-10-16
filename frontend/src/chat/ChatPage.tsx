@@ -62,7 +62,7 @@ export default function ChatPage() {
   );
 
   const { profiles, mergeProfiles } = useProfiles();
-  const conversations = useConversations();
+  const conversations = useConversations(auth?.userId ?? '');
   const active = useActiveConversation({
     onError: handleError,
     onProfiles: mergeProfiles,
@@ -559,10 +559,13 @@ function computeSeenMessageId(
   const others = detail.members.filter(m => !m.leftAt && m.userId !== myUserId);
   if (others.length === 0) return null;
   const minRead = Math.min(...others.map(m => m.lastReadSequence));
+  // Scan from newest to oldest; return the latest user message that is at or
+  // below the minimum read cursor. Do not bail out on the first unread message
+  // -- an earlier message from the same user may still be read.
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
-    if (message.senderId === myUserId) {
-      return message.sequence <= minRead ? message.id : null;
+    if (message.senderId === myUserId && message.sequence <= minRead) {
+      return message.id;
     }
   }
   return null;

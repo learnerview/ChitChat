@@ -251,9 +251,12 @@ public class MessageServiceImpl implements MessageService {
     public ReadStateResponse getReadState(String conversationId) {
         AuthorizationService.ConversationAccess access =
                 authorizationService.requireConversationAccess(conversationId);
-        long latest = access.conversation().getLastMessageSequence();
         long lastRead = access.member().getLastReadSequence();
-        return new ReadStateResponse(conversationId, lastRead, latest, Math.max(0L, latest - lastRead));
+        long latest = access.conversation().getLastMessageSequence();
+        long unreadCount = messageRepository
+                .countByTenantIdAndConversationIdAndDeletedAtIsNullAndSequenceGreaterThanAndSenderIdNot(
+                        access.conversation().getTenantId(), conversationId, lastRead, access.userId());
+        return new ReadStateResponse(conversationId, lastRead, latest, unreadCount);
     }
 
     @Override
@@ -284,7 +287,8 @@ public class MessageServiceImpl implements MessageService {
         UpdateResult result = mongoTemplate.updateFirst(
                 Query.query(Criteria.where("_id").is(message.getId())
                         .and("tenantId").is(message.getTenantId())
-                        .and("deletedAt").is(null)),
+                        .and("deletedAt").is(null)
+                        .and("editedAt").is(message.getEditedAt())),
                 new Update().set("content", content).set("editedAt", editedAt),
                 Message.class);
         if (result.getModifiedCount() == 0) {
@@ -332,6 +336,29 @@ public class MessageServiceImpl implements MessageService {
         }
         message.setDeletedAt(deletedAt);
         Message saved = message;
+
+        // If the deleted message was the conversation's latest, re-point lastMessageAt
+        // at the newest remaining non-deleted message (or clear it when none remain).
+        // Never roll back lastMessageSequence: it is a monotonic high-water mark, and
+        // rolling it back lets a new message reuse a deleted sequence number.
+        if (message.getSequence() == access.conversation().getLastMessageSequence()) {
+            List<Message> remaining = messageRepository
+                    .findByTenantIdAndConversationIdAndDeletedAtIsNullAndSequenceLessThan(
+                            message.getTenantId(), message.getConversationId(),
+                            message.getSequence(), PageRequest.of(0, 1, Sort.by(Sort.Direction.DESC, "sequence")));
+            if (!remaining.isEmpty()) {
+                Message newest = remaining.get(0);
+                mongoTemplate.updateFirst(
+                        Query.query(Criteria.where("_id").is(message.getConversationId())),
+                        new Update().set("lastMessageAt", newest.getCreatedAt()),
+                        Conversation.class);
+            } else {
+                mongoTemplate.updateFirst(
+                        Query.query(Criteria.where("_id").is(message.getConversationId())),
+                        new Update().set("lastMessageAt", (LocalDateTime) null),
+                        Conversation.class);
+            }
+        }
 
         publishIntegrationEvent(access.conversation().getTenantId(), "message.deleted", saved);
         realtimeEventPublisher.publish(saved.getConversationId(), RealtimeEvent.of(

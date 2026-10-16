@@ -31,4 +31,11 @@ public interface MessageRepository extends MongoRepository<Message, String> {
 
     List<Message> findByTenantIdAndConversationIdInAndDeletedAtIsNullAndContentContainingIgnoreCase(
             String tenantId, Collection<String> conversationIds, String query, Pageable pageable);
+
+    List<Message> findByTenantIdAndConversationIdAndDeletedAtIsNullAndSequenceLessThan(
+            String tenantId, String conversationId, long sequence, Pageable pageable);
+
+    /** Count of non-deleted messages from other users after the given sequence. */
+    long countByTenantIdAndConversationIdAndDeletedAtIsNullAndSequenceGreaterThanAndSenderIdNot(
+            String tenantId, String conversationId, long sequence, String senderId);
 }

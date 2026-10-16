@@ -21,10 +21,10 @@ import java.util.concurrent.ConcurrentHashMap;
 @Service
 public class WsTicketService {
 
-    public record WsTicket(String userId, String tenantId) {
+    public record WsTicket(String userId, String tenantId, Long passwordStamp) {
     }
 
-    private record Entry(String userId, String tenantId, Instant expiresAt) {
+    private record Entry(String userId, String tenantId, Long passwordStamp, Instant expiresAt) {
     }
 
     private final ConcurrentHashMap<String, Entry> tickets = new ConcurrentHashMap<>();
@@ -34,10 +34,11 @@ public class WsTicketService {
         this.ttlSeconds = ttlSeconds;
     }
 
-    public String issue(String userId, String tenantId) {
+    public String issue(String userId, String tenantId, Long passwordStamp) {
         evictExpired();
         String ticket = UUID.randomUUID().toString();
-        tickets.put(ticket, new Entry(userId, tenantId, Instant.now().plusSeconds(ttlSeconds)));
+        tickets.put(ticket, new Entry(userId, tenantId, passwordStamp,
+                Instant.now().plusSeconds(ttlSeconds)));
         return ticket;
     }
 
@@ -54,7 +55,7 @@ public class WsTicketService {
         if (entry == null || entry.expiresAt().isBefore(Instant.now())) {
             return Optional.empty();
         }
-        return Optional.of(new WsTicket(entry.userId(), entry.tenantId()));
+        return Optional.of(new WsTicket(entry.userId(), entry.tenantId(), entry.passwordStamp()));
     }
 
     private void evictExpired() {

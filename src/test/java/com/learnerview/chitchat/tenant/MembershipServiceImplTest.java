@@ -4,6 +4,7 @@ import com.learnerview.chitchat.common.error.ApiException;
 import com.learnerview.chitchat.common.error.ErrorCode;
 import com.learnerview.chitchat.conversation.ConversationMember;
 import com.learnerview.chitchat.conversation.ConversationMemberRepository;
+import com.learnerview.chitchat.realtime.WebSocketSubscriptionInterceptor;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -32,6 +33,9 @@ class MembershipServiceImplTest {
 
     @Mock
     private ConversationMemberRepository conversationMemberRepository;
+
+    @Mock
+    private WebSocketSubscriptionInterceptor subscriptionInterceptor;
 
     @InjectMocks
     private MembershipServiceImpl membershipService;

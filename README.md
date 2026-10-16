@@ -1,605 +1,355 @@
 # ChitChat
 
-ChitChat is a multi-tenant realtime messaging backend built with Spring Boot and MongoDB.
+ChitChat is a headless, multi-tenant realtime messaging backend built with Spring Boot and MongoDB.
 
-It handles authentication, workspaces, conversations, messaging, and realtime fanout through REST APIs and STOMP over WebSocket. The service is frontend-independent and can back web, mobile, or desktop clients.
+## Overview
+
+ChitChat provides authentication, workspaces (tenancy), conversations, messaging and realtime
+fanout through REST APIs and STOMP over WebSocket. It is frontend-independent and can back web,
+mobile or desktop clients. A React + Vite + TypeScript reference client lives in `frontend/`.
+
+The service is a modular monolith: each package is a self-contained module with its own domain,
+services, repositories and DTOs, and modules interact through service interfaces rather than
+reaching into each other's repositories. Consistency relies on atomic single-document updates and
+compensating cleanup, not on distributed transactions.
+
+> Status: this is a feature-complete engineering project, but it is **not production-hardened**.
+> See [Limitations & Known Issues](#limitations--known-issues) and
+> [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md) before considering a deployment.
 
 ## Features
 
- * **Authentication** - JWT bearer tokens (`sub` = userId), registration, login, workspace switching, external-token pass-through
-* **Workspaces (tenancy)** - workspace CRUD, members, roles, invite links
-* **Conversations** - DMs (uniqueness-enforced per tenant) and groups, membership management, ownership transfer
-* **Messaging** - idempotent sends, monotonic per-conversation sequence ordering, cursor pagination, replies, edit, soft delete
- * **Read tracking** - per-member read cursors (`lastReadSequence`), unread counts, read state exposed on the conversation list
-* **Realtime** - STOMP over WebSocket with typed event envelopes, authenticated handshake, subscription authorization
-* **Webhooks** - subscribe to domain events, HMAC-signed delivery
-* **Error model** - consistent JSON error responses with stable machine-readable codes
-
----
-
-## Tech Stack
-
-* Java 17, Spring Boot 3.2
-* Spring Security (JWT), Spring WebSocket (STOMP)
-* MongoDB (single-node compatible; transactions are not required)
-* Maven
-
----
+- **Authentication** — HS512 JWT bearer tokens (`sub` = userId), registration, login, workspace
+  switching, password change, optional external-token acceptance (see
+  [External tokens](#external-tokens)).
+- **Workspaces (tenancy)** — workspace CRUD, members, roles (OWNER/ADMIN/MEMBER), single-use
+  expiring invite links.
+- **Conversations** — DMs (uniqueness-enforced per tenant) and groups, membership management,
+  ownership transfer, per-viewer pin/mute/archive/notification level.
+- **Messaging** — idempotent sends (`clientMessageId`), monotonic per-conversation sequence
+  ordering, cursor pagination, replies, edit, soft delete.
+- **Read tracking** — per-member read cursors (`lastReadSequence`), unread counts, read state
+  exposed on the conversation list.
+- **Realtime** — STOMP over WebSocket (with SockJS fallback), typed event envelopes, authenticated
+  handshake (bearer JWT or single-use ticket), subscription authorization, resume/replay.
+- **Webhooks** — durable outbox, HMAC-SHA256-signed delivery, exponential-backoff retries,
+  dead-lettering, SSRF-guarded URLs.
+- **Error model** — consistent JSON error responses with stable machine-readable codes.
+- **Observability** — structured JSON/text logs via SLF4J; configurable log levels.
 
 ## Architecture
 
-Modular monolith. Each package is a self-contained module with its own domain, services, repositories, and DTOs. Modules interact through service interfaces, not by reaching into each other's repositories.
-
-The system intentionally remains a modular monolith: domain boundaries are enforced in code while deployment and data consistency remain simple. Consistency is achieved through atomic single-document updates and compensating cleanup rather than distributed transactions. Infrastructure such as distributed realtime fanout can be introduced behind existing interfaces (e.g. `RealtimeEventPublisher`) when horizontal scaling requires it.
+A modular monolith. Domain boundaries are enforced in code while deployment and data consistency
+remain simple. Realtime fanout sits behind the `RealtimeEventPublisher` interface so a distributed
+broker can be introduced when horizontal scaling requires it.
 
 ```text
 src/main/java/com/learnerview/chitchat/
   common/
     error/         - ErrorCode, ApiException, ErrorResponse, GlobalExceptionHandler
-    security/      - JwtTokenProvider, JwtAuthenticationFilter, JwtHandshakeHandler
+    security/      - JwtTokenProvider, JwtAuthenticationFilter, JwtHandshakeHandler, WsTicketService
     tenancy/       - TenantContext, TenantHeaderFilter, WebSocketTenantHandshakeInterceptor
     event/         - EventPublisherService (webhook fanout)
   authorization/   - AuthorizationService (single gatekeeper for all access checks)
-  auth/            - SecurityConfig, AuthController, MongoUserDetailsService, auth DTOs
+  auth/            - SecurityConfig, AuthController, WsTicketController, MongoUserDetailsService
   user/            - User profile, password change, search
   tenant/          - Workspaces, members, invite links
   conversation/    - Conversations + ConversationMember
   message/         - Messages, pagination, read state
-  realtime/        - WebSocket config, RealtimeEvent envelope, event publisher
-  webhook/         - Subscriptions and delivery
+  realtime/        - WebSocket config, RealtimeEvent envelope, event publisher, connection registry
+  webhook/         - Subscriptions, delivery worker, URL validator
 ```
 
-### Core contracts
+Full details, data model and core contracts: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
-**Ordering.** Every message gets a `sequence` allocated atomically on its conversation document (`$inc lastMessageSequence`). Ordering and pagination are defined by `sequence`, never by timestamps. `conversation.lastMessageSequence` is the high-water mark.
+## Tech Stack
 
-**Idempotency.** Senders attach a `clientMessageId` (unique per tenant + sender). A retry with the same key returns the original message instead of creating a duplicate; the unique index arbitrates races.
-
-**DM uniqueness.** Direct conversations store a `directKey` (`sorted(userA, userB).join(":")`), unique per tenant via a partial index. Two DM conversations for the same user pair cannot exist in one tenant.
-
-**Membership.** `conversation_members` holds one document per (conversation, user) with role, join/leave state, per-member read cursor, and preferences. Legacy `participantIds`/`readBy` are gone.
-
-**Authorization.** Protected domain requests run through `AuthorizationService`, which resolves the caller from the security context, validates workspace membership, and validates conversation membership + role. The JWT `sub` claim is the userId; `auth.getName()` is the userId everywhere.
-
----
-
-## Getting Started
-
-### Configuration
-
-| Env var | Default | Purpose |
-|---|---|---|
-| `MONGODB_URI` | `mongodb://localhost:27017/chitchat` | Database connection |
-| `MONGODB_AUTO_INDEX` | `true` | Create indexes at startup |
-| `SERVER_PORT` | `8080` | HTTP port |
-| `JWT_SECRET` | *(required)* | HMAC signing key |
-| `JWT_EXPIRATION_MS` | `86400000` | Token lifetime |
-| `ALLOWED_ORIGINS` | `*` | CORS + WS origins (set explicitly in production) |
-| `MAX_MESSAGE_LENGTH` | `5000` | Message content limit (chars) |
-| `MAX_GROUP_MEMBERS` | `500` | Group size limit |
-| `REALTIME_MAX_CONNECTIONS_PER_USER` | `5` | Concurrent WS connections per user (handshake `429`) |
-| `REALTIME_MAX_SUBSCRIPTIONS_PER_SESSION` | `100` | STOMP subscriptions per session |
-| `REALTIME_MAX_SEND_PAYLOAD_BYTES` | `65536` | Max SEND frame payload |
-| `REALTIME_SYNC_BATCH_LIMIT` | `200` | Max replayed messages per resume |
-| `WEBHOOK_POLL_INTERVAL_MS` | `5000` | Outbox worker poll interval |
-| `WEBHOOK_MAX_ATTEMPTS` | `8` | Delivery attempts before dead-letter |
-| `WEBHOOK_BATCH_SIZE` | `50` | Deliveries processed per poll |
-| `WEBHOOK_LEASE_SECONDS` | `300` | Worker claim lease (multi-instance safety) |
-| `WS_TICKET_TTL_SECONDS` | `60` | Single-use WebSocket ticket lifetime |
-
-### Run
-
-```bash
-# 1. Migrate existing data FIRST (see Migration below)
-mongosh "<MONGODB_URI>" scripts/migrate-v2.js
-
-# 2. Start
-mvn spring-boot:run
-```
-
-### Frontend
-
-A React + Vite + TypeScript client lives in `frontend/`:
-
-```bash
-cd frontend
-npm install
-npm run dev        # http://localhost:5173, proxies /api and /ws to :8080
-```
-
-It covers the full chat flow: register/login, workspace switching (create/join via invite), DM/group creation with user search, cursor-paged history, realtime delivery with bounded backoff + manual reconnect and resume replay, right-click context menus everywhere (messages, conversations, workspace card, conversation header, members, invites, webhooks, search hits, profile cards), message search (conversation or global), read receipts, unread badges, profile management (display name, password, account), workspace settings (members, roles, invites, webhooks), and conversation settings (rename, members, transfer ownership, per-viewer pin/mute/archive, delete). Browser clients authenticate the WebSocket handshake with a short-lived single-use `?ticket=` (see WebSocket → Handshake), so the access JWT never appears in a URL.
-
-### Tests
-
-```bash
-mvn test
-```
-
----
-
-# APIs
-
-All endpoints are prefixed `/api`. Protected endpoints require:
-
-```http
-Authorization: Bearer <jwt>
-X-Tenant-Id: <tenant-id>
-```
-
-## Authentication
-
-### Register
-
-`POST /api/auth/register`
-
-```json
-{ "username": "john", "displayName": "John Doe", "password": "secure_password" }
-```
-
-Creates the user, hashes the password with bcrypt, and provisions a default workspace where the user is `OWNER`. Returns `201`.
-
-### Login
-
-`POST /api/auth/login`
-
-Optional header `X-Tenant-Id` selects the workspace; otherwise the default membership is used.
-
-```json
-{ "username": "john", "password": "secure_password" }
-```
-
-Response:
-
-```json
-{
-  "token": "eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9...",
-  "type": "Bearer",
-  "userId": "u_123",
-  "username": "john",
-  "displayName": "John Doe",
-  "currentTenantId": "60d5ec49...",
-  "currentTenantName": "Acme Corp",
-  "tenants": [
-    { "id": "60d5ec49...", "name": "Acme Corp", "slug": "acme-corp", "role": "OWNER" }
-  ]
-}
-```
-
-### Switch Workspace
-
-`POST /api/auth/switch-workspace?tenantId=<tenant-id>`
-
-Returns a fresh token scoped to the given workspace. `403` if the user is not a member.
-
-### External Tokens
-
-When `EXTERNAL_AUTH_ENABLED=true`, a JWT issued by an external identity provider is accepted directly on every request (see `JwtAuthenticationFilter`); no exchange round-trip is required. Internal ChitChat tokens are validated with the ChitChat secret.
-
----
-
-## Workspaces
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `POST` | `/api/workspaces` | Create workspace; caller becomes `OWNER` |
-| `PUT` | `/api/workspaces/{tenantId}` | Update (owner only) |
-| `GET` | `/api/workspaces/{tenantId}/members` | List members |
-| `DELETE` | `/api/workspaces/{tenantId}/members/{userId}` | Remove member (owner/admin) |
-| `POST` | `/api/workspaces/{tenantId}/leave` | Leave workspace |
-| `DELETE` | `/api/workspaces/{tenantId}` | Delete workspace (owner only) |
-
-Member removal is a **soft delete** (`removedAt`) that cascades: all of the member's conversation memberships in the workspace are deactivated, REST/search/realtime access stops immediately, and re-inviting reinstates the original row. The last `OWNER` cannot be removed or leave — transfer ownership first. Deleting a workspace deactivates it for everyone (all API + realtime access denied), deactivates its webhooks, and revokes its invites.
-
-Create request:
-
-```json
-{ "name": "Acme Corp", "slug": "acme-corp", "description": "Primary workspace" }
-```
-
-## Invites
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `POST` | `/api/invites/generate` | Generate token (owner/admin) |
-| `GET` | `/api/invites/{tenantId}` | List active invites |
-| `POST` | `/api/invites/accept` | Join workspace via token |
-| `DELETE` | `/api/invites/{tenantId}/{token}` | Revoke an invite |
-
-Invites always expire: default 7 days, hard cap 365 days (`expiresInDays`). Tokens are single-use and tenant-bound — revoking verifies the token belongs to the caller's workspace. Accepting an invite into a deleted workspace is rejected; a previously removed member who re-joins has their original membership row reinstated.
-
----
-
-## Webhooks
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `POST` | `/api/integrations/webhooks` | Register endpoint (owner/admin) |
-| `GET` | `/api/integrations/webhooks` | List endpoints |
-| `PUT` | `/api/integrations/webhooks/{id}` | Update URL/events/active (owner/admin) |
-| `DELETE` | `/api/integrations/webhooks/{id}` | Delete endpoint (owner/admin) |
-
-```json
-{ "url": "https://example.com/hooks/chitchat", "events": ["message.sent"], "secret": "optional-hmac-secret" }
-```
-
-**URL validation (SSRF protection).** Only `http`/`https` URLs that resolve to public IP addresses are accepted — loopback, private, link-local (e.g. cloud metadata `169.254.169.254`), CGNAT and reserved ranges are rejected. DNS is re-validated at every delivery.
-
-**Durable delivery (outbox).** Events are first persisted to `webhook_deliveries`, then delivered by a background worker — queued deliveries survive application restarts. Delivery is **at-least-once**: consumers should deduplicate using `X-ChitChat-Delivery-Id`. Failed deliveries retry with exponential backoff (30s × 2^attempts, capped at 30 minutes); after `WEBHOOK_MAX_ATTEMPTS` (default 8) the delivery is dead-lettered as `FAILED`. Workers claim deliveries atomically with a lease, so multiple application instances can run the worker without double-delivery; a crashed worker's claims are recovered after the lease expires.
-
-**Delivery headers:**
-
-| Header | Purpose |
+| Component | Version / notes |
 |---|---|
-| `X-ChitChat-Event` | Event name (e.g. `message.sent`) |
-| `X-ChitChat-Delivery-Id` | Unique delivery ID (for dedup) |
-| `X-ChitChat-Timestamp` | Delivery timestamp |
-| `X-ChitChat-Signature` | `sha256=` HMAC-SHA256 of `timestamp + "." + body` (only when a secret is set) |
+| Java | 17 (`maven.compiler` source/target 17) |
+| Spring Boot | 3.2.3 (`spring.boot.version`) |
+| Spring Security | via `spring-boot-starter-security` (JWT filter, bcrypt) |
+| Spring WebSocket | via `spring-boot-starter-websocket` (STOMP + SockJS) |
+| Spring Data MongoDB | via `spring-boot-starter-data-mongodb` |
+| Bean Validation | via `spring-boot-starter-validation` |
+| JJWT | 0.11.5 (`jjwt-api`/`jjwt-impl`/`jjwt-jackson`) |
+| Lombok | 1.18.30 (compile-time only, `optional`) |
+| JUnit | 5.8.2 (`junit-jupiter`) |
+| Mockito | 4.11.0 |
+| Maven | build via `spring-boot-maven-plugin` (`repackage`) + `maven-compiler-plugin` 3.11.0 |
+| Frontend | React 18.3, Vite 5.4, TypeScript 5.6, `@stomp/stompjs` 7, `sockjs-client` 1.6, Vitest 2.1 |
 
-Verify the signature against the raw body to prevent spoofing and replay.
+## Prerequisites
 
----
+- **JDK 17** (the build targets Java 17).
+- **Maven 3.8+** (or use an IDE's bundled Maven).
+- **MongoDB** reachable at the configured URI. The application connects to MongoDB at runtime;
+  single-node MongoDB is supported (no replica set required). No embedded/auto-provisioned database
+  is bundled.
+- **Node.js 18+** and **npm** only if you want to run the React frontend.
 
-## Conversations
+## Quick Start
 
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/api/conversations` | My conversations (with unread counts) |
-| `POST` | `/api/conversations/dm` | Create/find DM |
-| `POST` | `/api/conversations/group` | Create group |
-| `GET` | `/api/conversations/{id}` | Conversation detail |
-| `PATCH` | `/api/conversations/{id}/name` | Rename group (owner) |
-| `POST` | `/api/conversations/{id}/members` | Add member (owner/admin) |
-| `DELETE` | `/api/conversations/{id}/members/{userId}` | Remove member (owner/admin) |
-| `POST` | `/api/conversations/{id}/leave` | Leave conversation |
-| `POST` | `/api/conversations/{id}/transfer` | Transfer ownership (owner) |
-| `DELETE` | `/api/conversations/{id}` | Delete conversation (DM: either member; group: owner) |
-| `PATCH` | `/api/conversations/{id}/settings` | Viewer-scoped pinned/muted/archived/notification level |
+```powershell
+# 1. Provide the required JWT secret (>= 32 chars). A .env file is read by start_server.ps1.
+Copy-Item .env.example .env
+#    then edit .env and set JWT_SECRET
 
-### Create DM
+# 2. Ensure MongoDB is running and reachable (default mongodb://localhost:27017/chitchat)
 
-`POST /api/conversations/dm`
-
-```json
-{ "userId": "u_456" }
+# 3. Start the backend (reads .env; falls back to a dev secret if JWT_SECRET is unset)
+.\start_server.ps1
+#    equivalent to: mvn spring-boot:run
 ```
 
-Returns `201`. Existing DMs are reused; a duplicate pair cannot be created (uniqueness-enforced). Self-DMs are rejected.
+The API is served at `http://localhost:8080`. See [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md)
+for every setting.
 
-### Create Group
+Frontend (optional):
 
-`POST /api/conversations/group`
-
-```json
-{ "name": "Project Team", "memberIds": ["u_1", "u_2", "u_3"] }
+```powershell
+.\start_frontend.ps1     # or: cd frontend; npm install; npm run dev
+# http://localhost:5173, proxies /api and /ws to http://localhost:8080
 ```
 
-Caller becomes `OWNER`. Returns `201`.
+A manual end-to-end smoke script is available at `test_saas_flow.ps1` (requires the backend and
+MongoDB to be running; it is **not** part of any automated CI).
 
-### Conversation response
+## Configuration
 
-```json
-{
-  "id": "c_1",
-  "tenantId": "t_1",
-  "type": "GROUP",
-  "status": "ACTIVE",
-  "name": "Project Team",
-  "createdBy": "u_1",
-  "directKey": null,
-  "lastMessageSequence": 42,
-  "lastMessageAt": "2026-10-07T09:15:00",
-  "createdAt": "2026-10-01T10:00:00",
-  "updatedAt": "2026-10-07T09:15:00",
-  "unreadCount": 3,
-  "lastReadSequence": 39,
-  "members": [ { "userId": "u_1", "role": "OWNER", "lastReadSequence": 39, "muted": false } ]
-}
-```
+All configuration is via environment variables (mapped in `src/main/resources/application.properties`).
+`name` = environment variable, `property` = Spring property it maps to.
 
-### Business rules
+| Name | Purpose | Default | Required |
+|---|---|---|---|
+| `JWT_SECRET` | HMAC signing key for ChitChat JWTs (`app.jwtSecret`). Must be ≥ 32 chars and not blank. | *(none)* | **Yes** |
+| `MONGODB_URI` | MongoDB connection URI (`spring.data.mongodb.uri`). | `mongodb://localhost:27017/chitchat` | No |
+| `MONGODB_AUTO_INDEX` | Create MongoDB indexes at startup (`spring.data.mongodb.auto-index-creation`). | `true` | No |
+| `SERVER_PORT` | HTTP port (`server.port`). | `8080` | No |
+| `JWT_EXPIRATION_MS` | ChitChat access-token lifetime in ms (`app.jwtExpirationInMs`). | `86400000` (24 h) | No |
+| `ALLOWED_ORIGINS` | Comma-separated CORS + WebSocket allowed origin patterns (`app.cors.allowed-origins`). | `*` | No (set explicitly in production) |
+| `MAX_MESSAGE_LENGTH` | Max message content length in characters (`app.limits.max-message-length`). | `5000` | No |
+| `MAX_GROUP_MEMBERS` | Max members per group conversation (`app.limits.max-group-members`). | `500` | No |
+| `REALTIME_MAX_CONNECTIONS_PER_USER` | Concurrent WebSocket connections per user (`app.realtime.max-connections-per-user`). | `5` | No |
+| `REALTIME_MAX_SUBSCRIPTIONS_PER_SESSION` | STOMP subscriptions per session (`app.realtime.max-subscriptions-per-session`). | `100` | No |
+| `REALTIME_MAX_SEND_PAYLOAD_BYTES` | Max STOMP SEND frame payload (`app.realtime.max-send-payload-bytes`). | `65536` | No |
+| `REALTIME_SYNC_BATCH_LIMIT` | Max messages replayed per resume request (`app.realtime.sync-batch-limit`). | `200` | No |
+| `EXTERNAL_AUTH_ENABLED` | Accept externally-issued JWTs (`app.externalAuth.enabled`). | `false` | No |
+| `EXTERNAL_AUTH_VERIFY_SIGNATURE` | Verify external JWT signatures (`app.externalAuth.verifySignature`). | `true` | No |
+| `EXTERNAL_AUTH_JWT_SECRET` | Secret used to verify external JWTs (`app.externalAuth.jwtSecret`). | *(blank)* | No |
+| `EXTERNAL_AUTH_USERNAME_CLAIM` | Claim used as the external username (`app.externalAuth.usernameClaim`). | `preferred_username` | No |
+| `EXTERNAL_AUTH_USER_ID_CLAIM` | Claim used as the external user id (`app.externalAuth.userIdClaim`). | `sub` | No |
+| `EXTERNAL_AUTH_AUTO_PROVISION_USER` | Auto-create a local user on first external login (`app.externalAuth.autoProvisionUser`). | `false` | No |
+| `LOG_LEVEL_ROOT` | Root log level (`logging.level.root`). | `INFO` | No |
+| `LOG_LEVEL_CHITCHAT` | Log level for `com.learnerview.chitchat` (`logging.level.com.learnerview.chitchat`). | `INFO` | No |
+| `WEBHOOK_POLL_INTERVAL_MS` | Webhook outbox worker poll interval (`app.webhook.poll-interval-ms`). | `5000` | No |
+| `WEBHOOK_POLL_INITIAL_DELAY_MS` | Worker initial delay after startup (`app.webhook.poll-initial-delay-ms`). | `10000` | No |
+| `WEBHOOK_MAX_ATTEMPTS` | Delivery attempts before dead-letter (`app.webhook.max-attempts`). | `8` | No |
+| `WEBHOOK_BATCH_SIZE` | Deliveries processed per poll (`app.webhook.batch-size`). | `50` | No |
+| `WEBHOOK_LEASE_SECONDS` | Worker claim lease (`app.webhook.lease-seconds`). | `300` | No |
+| `WS_TICKET_TTL_SECONDS` | WebSocket single-use ticket lifetime (`app.ws.ticket-ttl-seconds`). | `60` | No |
 
-* Owners must transfer ownership before leaving or being removed
-* Owners/admins manage membership; only the owner renames, transfers, or deletes
-* DMs require two distinct users
+Full reference, including startup validation behaviour: [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md).
 
----
+## Usage
 
-## Messages
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `POST` | `/api/conversations/{id}/messages` | Send message (idempotent) |
-| `GET` | `/api/conversations/{id}/messages` | Cursor-paginated history |
-| `GET` | `/api/conversations/{id}/messages/search?q=` | Search inside a conversation |
-| `GET` | `/api/messages/search?q=` | Search across my conversations |
-| `PATCH` | `/api/messages/{messageId}` | Edit (sender only) |
-| `DELETE` | `/api/messages/{messageId}` | Soft delete (sender or owner) |
-| `POST` | `/api/conversations/{id}/read` | Advance my read cursor |
-
-### Send
-
-```json
-{
-  "content": "Hello everyone",
-  "replyToId": "optional-message-id",
-  "clientMessageId": "client-generated-uuid"
-}
-```
-
-* `clientMessageId` - retries with the same key return the original message (same `id`, same `sequence`, no duplicate); a key reused for *different* content returns `409`
-* Content is limited to `MAX_MESSAGE_LENGTH` characters (`413` beyond)
-* Reply targets must belong to the same conversation
-
-### History (cursor pagination)
-
-`GET /api/conversations/{id}/messages?before=<sequence>&after=<sequence>&limit=50`
-
-* Default: newest first, `limit` default 50 (max 100)
-* `before` - messages with `sequence < before`, newest first (page *back* in history)
-* `after` - messages with `sequence > after`, oldest first (live catch-up)
-* `before` and `after` are mutually exclusive (`400 INVALID_CURSOR`)
-
-Response:
-
-```json
-{
-  "messages": [
-    { "id": "m_1", "sequence": 42, "content": "Hello", "senderId": "u_1",
-      "clientMessageId": "uuid-1", "createdAt": "2026-10-07T09:15:00",
-      "editedAt": null, "edited": false, "deleted": false }
-  ],
-  "hasMore": true,
-  "nextCursor": 42
-}
-```
-
-Pass `nextCursor` back as `before` to continue paging.
-
-### Read state
-
-`POST /api/conversations/{id}/read` with `{"sequence": 42}` (optional; body omitted = mark up to latest). The cursor only moves forward. The current read cursor and unread count are exposed on each conversation in `GET /api/conversations` as `lastReadSequence`, `latestSequence`, and `unreadCount`.
-
-### Message response
-
-Soft-deleted messages return `content: null` with `deleted: true`. Edited messages carry `editedAt`.
-
----
-
-## WebSocket
-
-Real-time messaging uses STOMP over WebSocket with SockJS fallback.
-
-### Handshake
-
-`/ws`
+All endpoints are prefixed `/api`. Protected requests require:
 
 ```http
 Authorization: Bearer <jwt>
 X-Tenant-Id: <tenant-id>
 ```
 
-Browsers that cannot set headers authenticate with a **single-use ticket** instead of the JWT: `POST /api/auth/ws-ticket` (authenticated) returns a 60-second ticket bound to the caller's userId and tenant, then connect with `?ticket=<ticket>`. Tickets are consumed on use — reconnects fetch a fresh one. Non-browser clients may use the `Authorization: Bearer` header directly. The handshake is rejected with `401` when the ticket/token is missing or invalid. The principal is the userId; the token's tenant must match the header, and the user must still be an active member of the workspace.
+Register and log in (see [`docs/API.md`](docs/API.md) for the full contract):
 
-The handshake is also rate-limited: a user may hold at most `REALTIME_MAX_CONNECTIONS_PER_USER` (default 5) concurrent connections; beyond that the handshake returns `429`.
+```powershell
+$base = "http://localhost:8080/api"
+Invoke-RestMethod -Method Post -Uri "$base/auth/register" -ContentType "application/json" `
+  -Body '{"username":"john","displayName":"John Doe","password":"password123"}'
 
-### Subscribe
-
-```
-/topic/conversations/{conversationId}   # conversation fanout
-/user/queue/sync                        # private sync stream (resume replays, control events)
-```
-
-Subscription is rejected unless the caller is an active member of the conversation *and* the workspace. Both destinations are the complete allowlist — anything else is rejected with `403`. A session may hold at most `REALTIME_MAX_SUBSCRIPTIONS_PER_SESSION` (default 100) subscriptions; unsubscribing frees a slot.
-
-### Publish
-
-```
-/app/conversations/{conversationId}/resume
+$auth = Invoke-RestMethod -Method Post -Uri "$base/auth/login" -ContentType "application/json" `
+  -Body '{"username":"john","password":"password123"}'
+$token  = $auth.token
+$tenant = $auth.currentTenantId
 ```
 
-The only SEND destination is the resume protocol (the message write path is REST: `POST /api/conversations/{id}/messages`). SEND payloads above `REALTIME_MAX_SEND_PAYLOAD_BYTES` (default 64 KB) are rejected.
+Create a group conversation and send a message:
 
-### Resume (missed-message recovery)
+```powershell
+$headers = @{ Authorization = "Bearer $token"; "X-Tenant-Id" = $tenant }
 
-Sequences are monotonically increasing per conversation, so a reconnecting client can recover every message after its last observed sequence:
+$group = Invoke-RestMethod -Method Post -Uri "$base/conversations/group" -Headers $headers `
+  -ContentType "application/json" -Body '{"name":"Project Team","memberIds":[]}'
 
-1. Subscribe to `/topic/conversations/{id}` first (live events start flowing immediately).
-2. Send `{"afterSequence": <last seen>}` to `/app/conversations/{id}/resume`.
-3. The server replays missed `MESSAGE_CREATED` envelopes to your private `/user/queue/sync`, then follows with `SYNC_COMPLETE`.
-4. Deduplicate: topic events and replay overlap — drop anything with `sequence <= afterSequence`.
-
-```json
-{ "afterSequence": 41 }
+Invoke-RestMethod -Method Post -Uri "$base/conversations/$($group.id)/messages" -Headers $headers `
+  -ContentType "application/json" `
+  -Body '{"content":"Hello everyone","clientMessageId":"uuid-1"}'
 ```
 
-`SYNC_COMPLETE` payload:
+Search uses the `query` parameter (**not** `q`):
 
-```json
-{ "afterSequence": 41, "delivered": 3, "latestSequence": 44, "hasMore": false }
+```powershell
+Invoke-RestMethod -Uri "$base/messages/search?query=hello" -Headers $headers
 ```
 
-`hasMore: true` means the batch limit (`REALTIME_SYNC_BATCH_LIMIT`) was hit — resume again with `afterSequence = sequence` of the last replayed message. Sending no/`null` position skips the replay and only reports the latest sequence. Replay and completion both arrive on `/user/queue/sync`.
+Cursor-paginated history:
 
-### Event envelope
-
-Everything on the topic arrives as a typed envelope; switch on `type`:
-
-```json
-{
-  "type": "MESSAGE_CREATED",
-  "tenantId": "t_1",
-  "conversationId": "c_1",
-  "sequence": 42,
-  "payload": { "id": "m_1", "senderId": "u_1", "content": "Hello" },
-  "timestamp": "2026-10-07T09:15:00"
-}
+```powershell
+Invoke-RestMethod -Uri "$base/conversations/$($group.id)/messages?before=100&limit=50" -Headers $headers
 ```
 
-Types: `MESSAGE_CREATED`, `MESSAGE_EDITED`, `MESSAGE_DELETED`, `READ_UPDATED`, `MEMBER_ADDED`, `MEMBER_REMOVED`, `MEMBER_ROLE_CHANGED`, `CONVERSATION_DELETED` (topic); `MESSAGE_CREATED` replays and `SYNC_COMPLETE` (user sync queue).
+### External tokens
 
-Realtime delivery is best-effort: the REST/WS write path never fails because fanout failed. Clients reconcile via the resume protocol above on reconnect.
+When `EXTERNAL_AUTH_ENABLED=true`, ChitChat accepts a JWT issued by an external identity provider.
+Ground rules (from `JwtTokenProvider` and `JwtAuthenticationFilter`):
 
----
+- The external token is only consulted when the token fails **internal** validation, so internal
+  ChitChat tokens always take precedence.
+- Signature verification **must** be enabled. If `EXTERNAL_AUTH_ENABLED=true` and
+  `EXTERNAL_AUTH_VERIFY_SIGNATURE=false`, the application **fails fast at startup**
+  (`@PostConstruct validateExternalAuthConfiguration()` throws `IllegalStateException`). Accepting
+  external JWTs without signature verification would allow token forgery.
+- A non-blank `EXTERNAL_AUTH_JWT_SECRET` is required for external tokens to validate. If enabled
+  with signature verification but **no** secret, external tokens are silently rejected (there is no
+  fail-fast for a missing secret).
+- A resolved external username **and** a tenant context (`X-Tenant-Id`) are required. If
+  `EXTERNAL_AUTH_AUTO_PROVISION_USER=false` (default) and no local user matches the username, the
+  request is treated as unauthenticated and receives `401`.
 
-## Multi-Tenancy
+## Testing
 
-Every request carries `X-Tenant-Id`. Isolation is enforced at four layers:
+```powershell
+mvn test          # backend: 152 tests across 24 suites (JUnit 5 / Mockito)
+```
 
-1. `TenantHeaderFilter` rejects requests without the header
-2. The JWT tenant claim must match the header (mismatch = `401`)
-3. `AuthorizationService` verifies workspace membership before any domain access
-4. Every repository query is scoped by `tenantId`, backed by compound indexes
+Backend tests are unit/`@WebMvcTest` tests with repositories mocked; they run without a live
+MongoDB. Results and scope are recorded in
+[Groundedness & Verification](#groundedness--verification).
 
----
+```powershell
+cd frontend
+npm test          # frontend: 17 Vitest tests across 3 files
+```
+
+`test_saas_flow.ps1` is a manual E2E smoke script (backend + MongoDB required), not CI.
+
+## Deployment
+
+Build a runnable jar and run it with MongoDB and a real `JWT_SECRET`:
+
+```powershell
+mvn clean package
+java -jar target/ChitChat-1.0.0.jar
+```
+
+No `Dockerfile`, container image, or CI pipeline is included in the repository. Operational
+guidance (process, reverse proxy, WebSocket forwarding, scaling caveats, MongoDB) is in
+[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
+
+## Limitations & Known Issues
+
+Honest, current-state limitations. Deliberate tradeoffs are marked *(by design)*.
+
+- **Not production-hardened.** There is no CI/CD, no containerization, no load/soak testing, no
+  rate limiting on REST endpoints, and no metrics/tracing. See the rubric in
+  [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md).
+- **MongoDB is required at runtime.** The app does not start a database and has no embedded
+  fallback; indexes are created at startup unless `MONGODB_AUTO_INDEX=false`.
+- **Single-node realtime is the default.** STOMP fanout uses the in-memory simple broker and the
+  per-user connection registry is in-process; horizontal scaling needs an external broker behind
+  `RealtimeEventPublisher` and a shared connection/ticket store.
+- **WebSocket tickets are in-memory** (single-use, short TTL). They do not survive restarts and are
+  not shared across instances.
+- **Webhook enqueue is best-effort.** Delivery itself is durable/retried, but the outbox write is
+  not transactionally coupled to the originating write (no Mongo transactions), so a crash between
+  the two can lose a single event.
+- **Token lifecycle.** Access tokens live 24 h by default. There are no refresh tokens and no
+  server-side revocation list; disabled accounts and password changes are enforced per request via
+  the user status and `pwdAt` stamp.
+- **Sequence gaps.** Sequences are monotonic but not gap-free; consumers must not assume contiguity.
+- **Search is `contains`-style.** Message search uses case-insensitive substring matching with a
+  fixed result cap (50), not a full-text index.
+- **`ALLOWED_ORIGINS` defaults to `*`.** Convenient for development, unsafe for production; set it
+  explicitly.
+- **Frontend JWT storage.** The reference client keeps the access token in `localStorage` (standard
+  SPA tradeoff).
+- **No OpenAPI/Swagger document** is generated; the API contract is maintained by hand in
+  [`docs/API.md`](docs/API.md).
+- **External auth secret is not fail-fast.** Enabling external auth with a missing secret does not
+  stop startup; external tokens simply never validate.
+
+## Groundedness & Verification
+
+### Verification status
+
+Verified in this repository at the time of writing:
+
+- **Build/compile**: `mvn test` compiles the main and test sources with Java 17 / Spring Boot 3.2.3.
+- **Automated backend tests**: **152 tests, 24 suites, 0 failures, 0 errors, 0 skipped**
+  (`mvn test`, exit 0). These are unit tests and one MockMvc security integration test; MongoDB is
+  mocked, so no live database was required.
+- **Automated frontend tests**: **17 tests, 3 files, 0 failures** (`npm test` → `vitest run`).
+- **Test scope highlights** (from `target/surefire-reports`): `MessageServiceImplTest` (22),
+  `ConversationServiceImplTest` (17), `WebSocketSubscriptionInterceptorTest` (12),
+  `AuthorizationServiceTest` (8), `MembershipServiceImplTest` (8), `Webhook*Test` (22 across four
+  suites), `MessageSecurityIntegrationTest` (7, real filter chain with mocked services).
+
+**Not verified** here:
+
+- No test requires or exercises a live MongoDB; no integration test hits a real database,
+  transaction, or index-uniqueness race at scale.
+- No end-to-end/browser test, no WebSocket test against a live broker, no real HTTP webhook
+  delivery, no performance/load test.
+- `test_saas_flow.ps1` was **not executed** during this documentation pass (it needs a running
+  backend + MongoDB). It was corrected to match the current contract but is unverified end-to-end.
+- The frontend was not type-checked/built (`npm run build`) during this pass; only `npm test` ran.
+
+### Data & evidence provenance
+
+- This project has **no datasets, training data, or scraped inputs**. Its "data" is application
+  state created at runtime by its own API (users, workspaces, conversations, messages) and stored
+  in MongoDB.
+- The webhook E2E example in this README targets `https://example.com/...` — a placeholder, not a
+  live endpoint.
+- Test evidence comes from executing `mvn test` and `npm test` locally; numbers above are copied
+  from that run (`target/surefire-reports` and Vitest output).
+- There are no external AI/model services. External auth, if enabled, delegates to an
+  operator-supplied identity provider via a shared HMAC secret.
+
+### AI-output grounding
+
+**This project contains no AI/ML components.** There is no model inference, no LLM calls, no
+embeddings, and no trained or synthetic data. Consequently, there are no AI-generated outputs to
+ground; every behavior is deterministic application logic that can be traced to source code.
+
+## Roadmap
+
+Not committed to a schedule; these are the known next steps implied by the limitations above:
+
+- CI pipeline (build + `mvn test` + `npm test`) and a container image.
+- Refresh tokens and/or a revocation list.
+- External broker for realtime fanout + shared ticket/connection store for multi-instance.
+- Broader integration tests against a real MongoDB (including index/uniqueness races).
+- REST rate limiting and basic metrics/health endpoints.
+- OpenAPI document generation.
+
+## Contributing
+
+- Keep the module boundaries: controllers/services depend on `AuthorizationService`, never on each
+  other's repositories.
+- Add or update tests with every behavior change and run `mvn test` (and `cd frontend; npm test`)
+  before opening a PR.
+- Match existing code style; do not add comments unless they explain non-obvious intent.
+- Never commit secrets or a real `.env` (it is gitignored; use `.env.example`).
 
 ## Security
 
-* **Authentication** - HMAC-SHA512 JWTs; `sub` = userId; protected routes require a valid bearer token
-* **Authorization** - `/api/auth/**` is public; everything else goes through `AuthorizationService`
-* **WebSocket** - JWT + tenant validation at handshake (missing/invalid tokens rejected with `401`), per-user connection cap, destination allowlist, membership check per subscription (conversation *and* workspace), subscription and payload limits
-* **Revocation** - workspace member removal is a soft delete that cascades to all conversation memberships; REST, search and realtime subscribe all re-check membership, and new WS handshakes are denied
-* **Passwords** - bcrypt-hashed (`passwordHash`), never returned by any endpoint
-* **User directory** - user search/lookup is scoped to the caller's workspace; cross-tenant enumeration is not possible
-* **Webhooks** - owner/admin only; SSRF-guarded URLs; signed, durable, retried delivery
-* **CORS** - restricted via `ALLOWED_ORIGINS`
-
----
-
-## Design decisions & known limitations
-
-Deliberate tradeoffs, documented so they are not mistaken for oversights:
-
-* **Token lifecycle** - access tokens live 24h (configurable). Disabled accounts and password changes invalidate existing tokens immediately (status + `pwdAt` stamp checks). Refresh tokens are a planned addition, not yet implemented.
-* **WebSocket tickets** - single-use, 60s, held in memory (single-node by design; a shared store is only needed for multi-instance deployment). This avoids placing the long-lived JWT in handshake URLs.
-* **Webhook delivery** - delivery is durable and retried (outbox + lease + backoff + dead-letter), but the *enqueue* is best-effort: it is not transactionally coupled to the originating write (that would require Mongo replica-set transactions, deliberately avoided). A process dying between the write and the enqueue can lose that one event.
-* **Realtime** - single-broker fanout behind `RealtimeEventPublisher`; horizontal scaling introduces a broker (e.g. Redis pub/sub) behind that interface.
-* **Frontend token storage** - the JWT lives in `localStorage` (standard SPA tradeoff; React escaping mitigates XSS, but a cookie-based session would be stronger).
-* **Sequence gaps** - sequences are monotonic but not gap-free (a failed save after allocation consumes a sequence). Consumers must not assume contiguity.
-
----
-
-## Error Model
-
-All errors share one shape:
-
-```json
-{
-  "timestamp": "2026-10-07T09:15:00Z",
-  "status": 404,
-  "code": "CONVERSATION_NOT_FOUND",
-  "message": "Conversation not found",
-  "path": "/api/conversations/c_9/messages"
-}
-```
-
-| Status | Codes |
-|---|---|
-| `400` | `BAD_REQUEST`, `VALIDATION_FAILED`, `MISSING_TENANT`, `INVALID_CURSOR` |
-| `401` | `UNAUTHORIZED` |
-| `403` | `FORBIDDEN`, `TENANT_ACCESS_DENIED`, `INSUFFICIENT_ROLE`, `CONVERSATION_ACCESS_DENIED`, `INSUFFICIENT_CONVERSATION_ROLE` |
-| `404` | `USER_NOT_FOUND`, `CONVERSATION_NOT_FOUND`, `MESSAGE_NOT_FOUND`, `WORKSPACE_NOT_FOUND` |
-| `409` | `CONFLICT`, `USERNAME_TAKEN`, `SLUG_TAKEN`, `ALREADY_MEMBER`, `CLIENT_MESSAGE_ID_CONFLICT` |
-| `413` | `PAYLOAD_TOO_LARGE`, `MESSAGE_TOO_LONG` |
-| `500` | `INTERNAL_ERROR` |
-
----
-
-## Database Collections
-
-### users
-
-Global identity. `username` unique.
-
-* `id`, `username`, `displayName`, `passwordHash`, `email`, `externalUserId`, `status`, `createdAt`
-
-### tenants / tenant_members
-
-Workspace definitions and memberships (`role`: OWNER, ADMIN, MEMBER). Unique on `{tenantId, userId}`. Removed members keep their row with `removedAt` set (soft delete — audit trail + reinstatement). `tenants.active = false` marks a deleted workspace; it is enforced on every membership check.
-
-### conversations
-
-* `tenantId`, `type` (DM | GROUP), `name`, `status`, `createdBy`, `createdAt`, `updatedAt`
-* `directKey` - sorted user pair for DMs; unique per tenant (partial index)
-* `lastMessageSequence` - monotonic ordering primitive; `lastMessageAt`
-
-Indexes: `{tenantId, directKey}` unique (partial), `{tenantId, updatedAt}`, `{tenantId, status}`
-
-### conversation_members
-
-One document per (conversation, user):
-
-* `tenantId`, `conversationId`, `userId`, `role` (OWNER | ADMIN | MEMBER), `joinedAt`, `leftAt`
-* `lastReadSequence` - read cursor (advances via `$max` only)
-* `muted`, `archived`, `pinned`, `notificationLevel` (ALL | MENTIONS | NONE)
-
-Indexes: `{conversationId, userId}` unique, `{tenantId, userId}`
-
-### messages
-
-* `tenantId`, `conversationId`, `senderId`, `clientMessageId`, `sequence`, `content`, `replyToId`
-* `createdAt`, `editedAt`, `deletedAt` (soft delete)
-
-Indexes: `{conversationId, sequence}` unique (partial), `{tenantId, conversationId, sequence}`, `{conversationId, createdAt}`, `{tenantId, senderId, clientMessageId}` unique (partial)
-
-### invite_links / webhook_subscriptions / webhook_deliveries
-
-Invite tokens with mandatory expiry (single-use). Webhook endpoints with event sets and HMAC secrets. `webhook_deliveries` is the durable outbox: `{status, nextAttemptAt}` indexed for the retry worker; statuses `PENDING` → `DELIVERED` | `FAILED`.
-
----
-
-## Migration (legacy data)
-
-If you have data from the pre-redesign schema, run the migration **before** deploying this version:
-
-```bash
-mongosh "<MONGODB_URI>" scripts/migrate-v2.js
-```
-
-It backfills, in order:
-
-1. `users.password` -> `users.passwordHash`
-2. `conversation_members` documents from legacy `conversations.participantIds`
-3. `directKey` for DM conversations (reports duplicate-DM conflicts for manual resolution)
-4. `messages.sequence` (ordered by `createdAt`, `_id`) and `conversations.lastMessageSequence/lastMessageAt`
-5. Removes legacy fields (`participantIds`, `readBy`, `edited`, `deleted`)
-
-The script is idempotent and prints a report. Resolve any reported conflicts before deploying. New deployments with an empty database do not need it.
-
----
-
-## Project Structure
-
-```text
-src/main/java/com/learnerview/chitchat/
-  common/
-    error/         ErrorCode, ApiException, ErrorResponse, GlobalExceptionHandler
-    security/      JwtTokenProvider, JwtAuthenticationFilter, JwtHandshakeHandler
-    tenancy/       TenantContext, TenantHeaderFilter, WebSocketTenantHandshakeInterceptor
-    event/         EventPublisherService
-  authorization/   AuthorizationService
-  auth/            SecurityConfig, AuthController, MongoUserDetailsService + dto/
-  user/            UserController, UserService(+Impl), User + dto/
-  tenant/          TenantController, TenantService(+Impl), MembershipService(+Impl),
-                   InviteController, InviteLinkService(+Impl) + repositories
-  conversation/    ConversationController, ConversationService(+Impl),
-                   Conversation, ConversationMember + repositories + dto/
-  message/         MessageController, MessageService(+Impl), Message + repository + dto/
-  realtime/        WebSocketConfig, RealtimeMessageController, WebSocketSubscriptionInterceptor,
-                   RealtimeEventPublisher, StompRealtimeEventPublisher, RealtimeEvent,
-                   RealtimeConnectionRegistry, ConnectionLimitHandshakeInterceptor, dto/ResumeRequest
-  webhook/         WebhookController, WebhookService(+Impl), WebhookEventPublisherServiceImpl + dto/
-
-src/test/java/com/learnerview/chitchat/
-  authorization/   AuthorizationServiceTest
-  conversation/    ConversationDirectKeyTest
-  message/         MessageServiceImplTest
-
-scripts/
-  migrate-v2.js    legacy data migration
-```
-
----
+See [`SECURITY.md`](SECURITY.md) for how secrets are handled and how to report a vulnerability.
+Highlights: `/api/auth/ws-ticket` requires authentication; all other `/api/auth/**` routes are
+public. Everything else is authenticated and authorized through `AuthorizationService`.
+Passwords are bcrypt-hashed and never returned. Webhook URLs are SSRF-guarded and optionally
+HMAC-signed. **No security audit has been performed**; treat the current state as unhardened.
 
 ## License
 
-MIT
+MIT. See [`LICENSE`](LICENSE) (Copyright © 2026 SUMIT SHUKLA).

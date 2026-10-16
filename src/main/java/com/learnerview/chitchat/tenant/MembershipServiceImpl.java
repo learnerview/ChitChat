@@ -3,6 +3,7 @@ package com.learnerview.chitchat.tenant;
 import com.learnerview.chitchat.common.error.ApiException;
 import com.learnerview.chitchat.common.error.ErrorCode;
 import com.learnerview.chitchat.conversation.ConversationMemberRepository;
+import com.learnerview.chitchat.realtime.WebSocketSubscriptionInterceptor;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -14,11 +15,14 @@ public class MembershipServiceImpl implements MembershipService {
 
     private final TenantMemberRepository tenantMemberRepository;
     private final ConversationMemberRepository conversationMemberRepository;
+    private final WebSocketSubscriptionInterceptor subscriptionInterceptor;
 
     public MembershipServiceImpl(TenantMemberRepository tenantMemberRepository,
-                                 ConversationMemberRepository conversationMemberRepository) {
+                                 ConversationMemberRepository conversationMemberRepository,
+                                 WebSocketSubscriptionInterceptor subscriptionInterceptor) {
         this.tenantMemberRepository = tenantMemberRepository;
         this.conversationMemberRepository = conversationMemberRepository;
+        this.subscriptionInterceptor = subscriptionInterceptor;
     }
 
     @Override
@@ -73,6 +77,10 @@ public class MembershipServiceImpl implements MembershipService {
                     conversationMember.setLeftAt(LocalDateTime.now());
                     conversationMemberRepository.save(conversationMember);
                 });
+
+        // Revoke active WebSocket subscriptions so a removed member cannot
+        // continue receiving conversation events on an already-open session.
+        subscriptionInterceptor.revokeUserSubscriptions(userId);
     }
 
     @Override

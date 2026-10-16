@@ -14,6 +14,8 @@ import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageDeliveryException;
 import org.springframework.messaging.simp.stomp.StompCommand;
 import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
+import org.springframework.messaging.simp.user.SimpUserRegistry;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -46,6 +48,9 @@ class WebSocketSubscriptionInterceptorTest {
     @Mock
     private com.learnerview.chitchat.tenant.TenantMemberRepository tenantMemberRepository;
 
+    @Mock
+    private ObjectProvider<SimpUserRegistry> userRegistryProvider;
+
     private WebSocketSubscriptionInterceptor interceptor;
 
     private final Principal principal = new UsernamePasswordAuthenticationToken(USER, null, List.of());
@@ -54,7 +59,8 @@ class WebSocketSubscriptionInterceptorTest {
     void setUp() {
         // max 2 subscriptions per session, max 100 byte payloads
         interceptor = new WebSocketSubscriptionInterceptor(
-                conversationRepository, memberRepository, tenantMemberRepository, 2, 100);
+                conversationRepository, memberRepository, tenantMemberRepository,
+                userRegistryProvider, 2, 100);
     }
 
     @Test

@@ -192,7 +192,9 @@ class MessageServiceImplTest {
         assertThat(state.conversationId()).isEqualTo(CONVERSATION);
         assertThat(state.lastReadSequence()).isEqualTo(0L);
         assertThat(state.latestSequence()).isEqualTo(100L);
-        assertThat(state.unreadCount()).isEqualTo(100L);
+        // No messages exist in the repository, so the actual unread count is 0,
+        // not the sequence gap of 100.
+        assertThat(state.unreadCount()).isEqualTo(0L);
     }
 
     @Test

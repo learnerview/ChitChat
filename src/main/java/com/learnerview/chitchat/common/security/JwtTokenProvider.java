@@ -1,12 +1,11 @@
 package com.learnerview.chitchat.common.security;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.SignatureAlgorithm;
 import io.jsonwebtoken.security.Keys;
-import org.springframework.beans.factory.annotation.Autowired;
+import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -14,12 +13,10 @@ import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.util.Base64;
 import java.util.Date;
 import java.util.Map;
 
 @Component
-@SuppressWarnings("unchecked")
 public class JwtTokenProvider {
 
     private static final String TENANT_CLAIM = "tenantId";
@@ -46,9 +43,6 @@ public class JwtTokenProvider {
 
     @Value("${app.externalAuth.userIdClaim:sub}")
     private String externalUserIdClaim;
-
-    @Autowired
-    private ObjectMapper objectMapper;
 
     private SecretKey getSigningKey() {
         return Keys.hmacShaKeyFor(deriveHmacKeyMaterial(jwtSecret));
@@ -123,25 +117,29 @@ public class JwtTokenProvider {
         return externalAuthEnabled;
     }
 
+    @PostConstruct
+    void validateExternalAuthConfiguration() {
+        if (externalAuthEnabled && !externalVerifySignature) {
+            throw new IllegalStateException(
+                    "app.externalAuth.verifySignature must be true when app.externalAuth.enabled is true; "
+                            + "accepting external JWTs without signature verification allows token forgery");
+        }
+    }
+
     public boolean validateExternalToken(String token) {
-        if (!externalAuthEnabled) {
+        if (!externalAuthEnabled || !externalVerifySignature) {
+            return false;
+        }
+        if (externalJwtSecret == null || externalJwtSecret.isBlank()) {
             return false;
         }
 
         try {
-            if (externalVerifySignature) {
-                if (externalJwtSecret == null || externalJwtSecret.isBlank()) {
-                    return false;
-                }
-                Jwts.parserBuilder()
-                        .setSigningKey(getExternalSigningKey())
-                        .build()
-                        .parseClaimsJws(token);
-                return true;
-            }
-
-            Map<String, Object> claims = parseWithoutVerification(token);
-            return claims.containsKey(externalUsernameClaim) || claims.containsKey("sub");
+            Jwts.parserBuilder()
+                    .setSigningKey(getExternalSigningKey())
+                    .build()
+                    .parseClaimsJws(token);
+            return true;
         } catch (Exception ex) {
             return false;
         }
@@ -164,28 +162,14 @@ public class JwtTokenProvider {
 
     private Map<String, Object> getExternalClaims(String token) {
         try {
-            if (externalVerifySignature && externalJwtSecret != null && !externalJwtSecret.isBlank()) {
-                Claims claims = Jwts.parserBuilder()
-                        .setSigningKey(getExternalSigningKey())
-                        .build()
-                        .parseClaimsJws(token)
-                        .getBody();
-                return claims;
-            }
-
-            return parseWithoutVerification(token);
+            Claims claims = Jwts.parserBuilder()
+                    .setSigningKey(getExternalSigningKey())
+                    .build()
+                    .parseClaimsJws(token)
+                    .getBody();
+            return claims;
         } catch (Exception ex) {
             throw new IllegalArgumentException("Invalid external JWT", ex);
         }
-    }
-
-    private Map<String, Object> parseWithoutVerification(String token) throws Exception {
-        String[] parts = token.split("\\.");
-        if (parts.length < 2) {
-            throw new IllegalArgumentException("Invalid JWT format");
-        }
-
-        byte[] decoded = Base64.getUrlDecoder().decode(parts[1]);
-        return objectMapper.readValue(decoded, Map.class);
     }
 }

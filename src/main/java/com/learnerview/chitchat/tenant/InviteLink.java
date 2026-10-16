@@ -33,6 +33,10 @@ public class InviteLink {
 
     private LocalDateTime createdAt;
 
+    private boolean used;
+
+    private LocalDateTime usedAt;
+
     public boolean isExpired() {
         if (expiresAt == null) {
             return false;

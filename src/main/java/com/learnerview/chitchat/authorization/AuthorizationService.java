@@ -8,7 +8,6 @@ import com.learnerview.chitchat.conversation.ConversationMember;
 import com.learnerview.chitchat.conversation.ConversationMemberRepository;
 import com.learnerview.chitchat.conversation.ConversationRepository;
 import com.learnerview.chitchat.conversation.ConversationType;
-import com.learnerview.chitchat.tenant.Tenant;
 import com.learnerview.chitchat.tenant.TenantMember;
 import com.learnerview.chitchat.tenant.TenantMemberRepository;
 import com.learnerview.chitchat.tenant.TenantRepository;

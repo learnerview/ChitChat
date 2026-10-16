@@ -1,8 +1,10 @@
-# ChitChat end-to-end API test — matches the CURRENT REST contract.
-# Run with the backend up:  .\start_server.ps1   (then in another shell)
-#   .\test_saas_flow.ps1
+# ChitChat end-to-end (smoke) API test — manual, NOT part of CI.
+# Requires a running backend AND a reachable MongoDB:
+#   1. .\start_server.ps1        (which needs mongod / MONGODB_URI)
+#   2. .\test_saas_flow.ps1      (in another shell)
 # Covers: auth, invite join links, workspaces, conversations, messages,
 # search, read receipts, per-viewer settings, webhooks, deletion.
+# Search query parameter is `query` (not `q`) — see MessageController/UserController.
 $BASE = "http://localhost:8080/api"
 $stamp = Get-Date -Format "HHmmss"
 $pw = "password123"
@@ -104,9 +106,9 @@ Check "history visible to member" (@($page.messages).Count -ge 3)
 $edited = Api PATCH "/messages/$($m2.id)" @{ content = "searchable zebra EDITED" } $t1 $tenant
 Check "edit message" ($edited.status -eq 200 -and $edited.json.edited) "got $($edited.status)"
 
-$s1 = (Api GET "/conversations/$grpId/messages/search?q=zebra" $null $t1 $tenant).json
+$s1 = (Api GET "/conversations/$grpId/messages/search?query=zebra" $null $t1 $tenant).json
 Check "conversation search" (@($s1).Count -ge 1)
-$s2 = (Api GET "/messages/search?q=zebra" $null $t2 $tenant).json
+$s2 = (Api GET "/messages/search?query=zebra" $null $t2 $tenant).json
 Check "global search" (@($s2).Count -ge 1)
 
 $read = Api POST "/conversations/$grpId/read" @{ sequence = $m2.sequence } $t2 $tenant
@@ -145,7 +147,7 @@ Check "delete webhook" ($hdel.status -eq 204) "got $($hdel.status)"
 Write-Host "`n=== 9. Profiles & search ===" -ForegroundColor Cyan
 $updProf = Api PUT "/users/profile" @{ displayName = "Member Renamed $stamp" } $t2 $tenant
 Check "update display name" ($updProf.status -eq 200 -and $updProf.json.username -eq $u2) "got $($updProf.status) $($updProf.text)"
-$found = (Api GET "/users/search?q=$u2" $null $t1 $tenant).json
+$found = (Api GET "/users/search?query=$u2" $null $t1 $tenant).json
 Check "user search" (@($found).Count -ge 1)
 $ticket = Api POST "/auth/ws-ticket" $null $t2 $tenant
 Check "ws ticket" ($ticket.status -eq 200 -and $null -ne $ticket.json.ticket) "got $($ticket.status)"

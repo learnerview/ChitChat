@@ -50,6 +50,7 @@ class WebhookDeliveryWorkerTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
     void deliveriesClaimedByAnotherWorkerAreSkipped() throws Exception {
         WebhookDelivery delivery = pending(0);
         stubDue(delivery);
@@ -63,6 +64,7 @@ class WebhookDeliveryWorkerTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
     void successfulDeliveryIsMarkedDelivered() throws Exception {
         WebhookDelivery delivery = pending(0);
         stubDue(delivery);
@@ -78,6 +80,7 @@ class WebhookDeliveryWorkerTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
     void failedDeliveryIsRetriedWithBackoff() throws Exception {
         WebhookDelivery delivery = pending(0);
         stubDue(delivery);
@@ -94,6 +97,7 @@ class WebhookDeliveryWorkerTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
     void exhaustedAttemptsAreDeadLettered() throws Exception {
         WebhookDelivery delivery = pending(MAX_ATTEMPTS - 1);
         stubDue(delivery);
@@ -108,6 +112,7 @@ class WebhookDeliveryWorkerTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
     void transportErrorsAreRetried() throws Exception {
         WebhookDelivery delivery = pending(0);
         stubDue(delivery);
@@ -124,6 +129,7 @@ class WebhookDeliveryWorkerTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
     void removedSubscriptionFailsPermanentlyWithoutHttp() {
         WebhookDelivery delivery = pending(0);
         stubDue(delivery);
@@ -137,6 +143,7 @@ class WebhookDeliveryWorkerTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
     void deactivatedSubscriptionFailsPermanentlyWithoutHttp() {
         WebhookDelivery delivery = pending(0);
         stubDue(delivery);

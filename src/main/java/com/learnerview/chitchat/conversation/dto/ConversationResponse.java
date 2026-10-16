@@ -29,7 +29,8 @@ public record ConversationResponse(
         List<ConversationMemberResponse> members
 ) {
 
-    public static ConversationResponse summary(Conversation conversation, ConversationMember viewer) {
+    public static ConversationResponse summary(Conversation conversation, ConversationMember viewer,
+                                               long unreadCount) {
         long lastRead = viewer == null ? 0L : viewer.getLastReadSequence();
         long latest = conversation.getLastMessageSequence();
         return new ConversationResponse(
@@ -44,7 +45,7 @@ public record ConversationResponse(
                 conversation.getLastMessageAt(),
                 conversation.getCreatedAt(),
                 conversation.getUpdatedAt(),
-                Math.max(0L, latest - lastRead),
+                unreadCount,
                 viewer == null ? null : lastRead,
                 viewer != null && viewer.isPinned(),
                 viewer != null && viewer.isMuted(),
@@ -55,26 +56,26 @@ public record ConversationResponse(
 
     public static ConversationResponse detail(Conversation conversation,
                                               ConversationMember viewer,
-                                              List<ConversationMember> members) {
-        ConversationResponse summary = summary(conversation, viewer);
+                                              List<ConversationMember> members,
+                                              long unreadCount) {
         return new ConversationResponse(
-                summary.id(),
-                summary.tenantId(),
-                summary.type(),
-                summary.status(),
-                summary.name(),
-                summary.createdBy(),
-                summary.directKey(),
-                summary.lastMessageSequence(),
-                summary.lastMessageAt(),
-                summary.createdAt(),
-                summary.updatedAt(),
-                summary.unreadCount(),
-                summary.lastReadSequence(),
-                summary.pinned(),
-                summary.muted(),
-                summary.archived(),
-                summary.notificationLevel(),
+                conversation.getId(),
+                conversation.getTenantId(),
+                conversation.getType(),
+                conversation.getStatus() == null ? ConversationStatus.ACTIVE : conversation.getStatus(),
+                conversation.getName(),
+                conversation.getCreatedBy(),
+                conversation.getDirectKey(),
+                conversation.getLastMessageSequence(),
+                conversation.getLastMessageAt(),
+                conversation.getCreatedAt(),
+                conversation.getUpdatedAt(),
+                unreadCount,
+                viewer == null ? null : viewer.getLastReadSequence(),
+                viewer != null && viewer.isPinned(),
+                viewer != null && viewer.isMuted(),
+                viewer != null && viewer.isArchived(),
+                viewer == null ? ConversationMember.NotificationLevel.ALL : viewer.getNotificationLevel(),
                 members.stream().map(ConversationMemberResponse::from).toList());
     }
 }

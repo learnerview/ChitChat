@@ -5,8 +5,12 @@ import com.learnerview.chitchat.common.error.ApiException;
 import com.learnerview.chitchat.common.error.ErrorCode;
 import com.learnerview.chitchat.common.event.EventPublisherService;
 import com.learnerview.chitchat.common.tenancy.TenantContext;
+import com.learnerview.chitchat.conversation.ConversationMember;
+import com.learnerview.chitchat.conversation.ConversationMemberRepository;
+import com.learnerview.chitchat.conversation.ConversationRepository;
 import com.learnerview.chitchat.conversation.dto.ConversationMemberResponse;
 import com.learnerview.chitchat.conversation.dto.ConversationResponse;
+import com.learnerview.chitchat.message.MessageRepository;
 import com.learnerview.chitchat.realtime.RealtimeEvent;
 import com.learnerview.chitchat.realtime.RealtimeEventPublisher;
 import com.learnerview.chitchat.realtime.RealtimeEventType;
@@ -42,6 +46,7 @@ public class ConversationServiceImpl implements ConversationService {
     private final ConversationMemberRepository memberRepository;
     private final UserRepository userRepository;
     private final TenantMemberRepository tenantMemberRepository;
+    private final MessageRepository messageRepository;
     private final AuthorizationService authorizationService;
     private final EventPublisherService eventPublisherService;
     private final RealtimeEventPublisher realtimeEventPublisher;
@@ -54,6 +59,7 @@ public class ConversationServiceImpl implements ConversationService {
                                    ConversationMemberRepository memberRepository,
                                    UserRepository userRepository,
                                    TenantMemberRepository tenantMemberRepository,
+                                   MessageRepository messageRepository,
                                    AuthorizationService authorizationService,
                                    EventPublisherService eventPublisherService,
                                    RealtimeEventPublisher realtimeEventPublisher,
@@ -62,6 +68,7 @@ public class ConversationServiceImpl implements ConversationService {
         this.memberRepository = memberRepository;
         this.userRepository = userRepository;
         this.tenantMemberRepository = tenantMemberRepository;
+        this.messageRepository = messageRepository;
         this.authorizationService = authorizationService;
         this.eventPublisherService = eventPublisherService;
         this.realtimeEventPublisher = realtimeEventPublisher;
@@ -260,7 +267,14 @@ public class ConversationServiceImpl implements ConversationService {
                 .sorted(Comparator.comparing(
                         (Conversation c) -> c.getLastMessageAt() != null ? c.getLastMessageAt() : c.getCreatedAt())
                         .reversed())
-                .map(c -> ConversationResponse.summary(c, membershipByConversation.get(c.getId())))
+                .map(c -> {
+                    ConversationMember membership = membershipByConversation.get(c.getId());
+                    long lastRead = membership == null ? 0L : membership.getLastReadSequence();
+                    long unreadCount = messageRepository
+                            .countByTenantIdAndConversationIdAndDeletedAtIsNullAndSequenceGreaterThanAndSenderIdNot(
+                                    c.getTenantId(), c.getId(), lastRead, userId);
+                    return ConversationResponse.summary(c, membership, unreadCount);
+                })
                 .toList();
     }
 
@@ -535,6 +549,10 @@ public class ConversationServiceImpl implements ConversationService {
                 .filter(m -> m.getUserId().equals(viewerUserId))
                 .findFirst()
                 .orElse(null);
-        return ConversationResponse.detail(conversation, viewer, members);
+        long lastRead = viewer == null ? 0L : viewer.getLastReadSequence();
+        long unreadCount = messageRepository
+                .countByTenantIdAndConversationIdAndDeletedAtIsNullAndSequenceGreaterThanAndSenderIdNot(
+                        conversation.getTenantId(), conversation.getId(), lastRead, viewerUserId);
+        return ConversationResponse.detail(conversation, viewer, members, unreadCount);
     }
 }

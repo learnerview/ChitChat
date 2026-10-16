@@ -95,12 +95,21 @@ public class AuthController {
 
         String activeTenantId;
         if (tenantId != null && !tenantId.isBlank()) {
-            if (memberships.stream().noneMatch(m -> m.getTenantId().equals(tenantId))) {
+            boolean hasActiveMembership = memberships.stream()
+                    .anyMatch(m -> m.getTenantId().equals(tenantId)
+                            && tenantService.getTenantById(m.getTenantId())
+                                    .map(Tenant::isActive).orElse(false));
+            if (!hasActiveMembership) {
                 return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
             }
             activeTenantId = tenantId;
         } else {
-            activeTenantId = memberships.get(0).getTenantId();
+            activeTenantId = memberships.stream()
+                    .map(m -> m.getTenantId())
+                    .filter(tid -> tenantService.getTenantById(tid).map(Tenant::isActive).orElse(false))
+                    .findFirst()
+                    .orElseThrow(() -> new ApiException(ErrorCode.FORBIDDEN,
+                            "No active workspace available"));
         }
 
         return ResponseEntity.ok(buildSaaSResponse(user, activeTenantId, memberships));
@@ -122,7 +131,21 @@ public class AuthController {
         User user = userService.findById(userId)
                 .orElseThrow(() -> new ApiException(ErrorCode.USER_NOT_FOUND));
 
+        // Reject tokens issued before the current password was changed.
+        Long tokenStamp = tokenProvider.getPasswordStampFromToken(token);
+        long changedAtMillis = user.getPasswordChangedAt() == null ? -1L
+                : user.getPasswordChangedAt().atZone(java.time.ZoneId.systemDefault())
+                .toInstant().toEpochMilli();
+        if (tokenStamp == null || tokenStamp != changedAtMillis) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+
         if (!membershipService.isMember(tenantId, user.getId())) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
+
+        // Reject switching to an inactive workspace.
+        if (!tenantService.getTenantById(tenantId).map(Tenant::isActive).orElse(false)) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
         }
 
